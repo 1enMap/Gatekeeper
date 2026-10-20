@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gatekeeper</string>
+    <string name="tile_label">Firewall</string>
+    <string name="accessibility_label">Gatekeeper foreground detection</string>
+    <string name="accessibility_description">Detects which app is open so it can be allowed internet. No screen content is read.</string>
+</resources>

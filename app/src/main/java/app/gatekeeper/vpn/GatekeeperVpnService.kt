@@ -18,7 +18,17 @@ import app.gatekeeper.data.InstalledApps
 import app.gatekeeper.foreground.ForegroundAccessibilityService
 import app.gatekeeper.foreground.UsageStatsPoller
 import app.gatekeeper.gatekeeper
+import app.gatekeeper.data.ConnectionAttempt
+import app.gatekeeper.insights.OwnerLookup
 import app.gatekeeper.insights.TrafficObserver
+import app.gatekeeper.monitor.ForwardingEngine
+import app.gatekeeper.monitor.LiveMonitor
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import java.net.InetAddress
+import java.util.concurrent.ConcurrentLinkedQueue
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -42,11 +52,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Local "VPN" that captures the traffic of blocked apps only and drops it.
+ * Local "VPN" with two modes.
  *
- * Only apps passed to [VpnService.Builder.addAllowedApplication] are routed into the tunnel;
- * every other app keeps using the normal network. The tunnel is never connected to anything,
- * so whatever enters it is read and discarded.
+ * Normal mode: only blocked apps are routed into the tunnel (addAllowedApplication); every
+ * other app keeps using the normal network. Whatever enters the tunnel is read and discarded.
+ *
+ * Live monitor (on request, never persisted): every app except Gatekeeper is routed into the
+ * tunnel. Blocked apps' packets are still dropped; everything else is relayed to the internet by
+ * [ForwardingEngine], which reports each connection live.
  */
 class GatekeeperVpnService : VpnService() {
 
@@ -58,6 +71,12 @@ class GatekeeperVpnService : VpnService() {
     // Written from tunnelDispatcher; onDestroy reads them to close synchronously.
     @Volatile private var tunnel: ParcelFileDescriptor? = null
     @Volatile private var drainer: TunnelDrainer? = null
+    @Volatile private var forwarder: ForwardingEngine? = null
+    /** DNS servers the current monitor tunnel was built with. */
+    private var monitorDns: List<InetAddress>? = null
+    private val finishedConnections = ConcurrentLinkedQueue<ConnectionAttempt>()
+    private val underlyingDns = MutableStateFlow<List<InetAddress>>(emptyList())
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private var rulesJob: Job? = null
     private var pollerJob: Job? = null
@@ -66,6 +85,7 @@ class GatekeeperVpnService : VpnService() {
     /** Packages in the current tunnel; read by the observer on the drainer thread. */
     @Volatile private var appliedPackages: Set<String> = emptySet()
     @Volatile private var recordConnections = true
+    private val owners by lazy { OwnerLookup(this) }
     private val observer by lazy {
         TrafficObserver(this, gatekeeper.connections) { appliedPackages }
     }
@@ -96,12 +116,20 @@ class GatekeeperVpnService : VpnService() {
         _status.value = _status.value.copy(running = true)
         registerReceivers()
 
+        watchUnderlyingDns()
+
         @OptIn(FlowPreview::class)
-        rulesJob = gatekeeper.engine.blockedPackages
-            .filterNotNull()
+        rulesJob = combine(gatekeeper.engine.blockedPackages.filterNotNull(), _monitoring, underlyingDns) { blocked, monitor, dns ->
+            // DNS servers only matter for the monitor tunnel; ignoring them otherwise avoids rebuilds.
+            Triple(blocked, monitor, if (monitor) dns else emptyList())
+        }
             .debounce(REBUILD_DEBOUNCE_MS)
             .distinctUntilChanged()
-            .onEach { blocked -> withContext(tunnelDispatcher) { applyBlockedSet(blocked) } }
+            .onEach { (blocked, monitor, dns) ->
+                withContext(tunnelDispatcher) {
+                    if (monitor) applyMonitor(blocked - packageName, dns) else applyBlockedSet(blocked)
+                }
+            }
             .launchIn(scope)
 
         val fallbackEnabled = gatekeeper.settings.state
@@ -118,7 +146,10 @@ class GatekeeperVpnService : VpnService() {
             }
             while (true) {
                 delay(LOG_FLUSH_MS)
-                withContext(Dispatchers.IO) { observer.flush() }
+                withContext(Dispatchers.IO) {
+                    observer.flush()
+                    flushFinishedConnections()
+                }
             }
         }
     }
@@ -188,36 +219,160 @@ class GatekeeperVpnService : VpnService() {
 
         val oldTunnel = tunnel
         val oldDrainer = drainer
+        val oldForwarder = forwarder
         tunnel = newTunnel
         appliedPackages = applied
         drainer = TunnelDrainer(newTunnel) { buf, len ->
             if (recordConnections) observer.onPacket(buf, len)
         }.also { it.start() }
+        forwarder = null
+        monitorDns = null
         oldDrainer?.shutdown()
+        oldForwarder?.let {
+            it.shutdown()
+            gatekeeper.engine.log(null, "Live monitor off")
+        }
         oldTunnel?.closeQuietly()
 
         gatekeeper.engine.log(null, "Firewall updated: ${applied.size} apps blocked")
         publish(applied.size)
     }
 
+    /**
+     * Live monitor: route every app (except Gatekeeper) into the tunnel and relay their traffic.
+     * Changes to the blocked set are applied inside the running engine without a rebuild.
+     */
+    private suspend fun applyMonitor(blocked: Set<String>, dns: List<InetAddress>) {
+        if (stopping) return
+        val running = forwarder
+        if (running != null && dns == monitorDns) {
+            running.updateBlocked(blocked)
+            appliedPackages = blocked
+            publish(blocked.size)
+            return
+        }
+
+        val builder = Builder()
+            .setSession("Gatekeeper live monitor")
+            .addAddress(TUN_ADDRESS_V4, 32)
+            .addAddress(TUN_ADDRESS_V6, 128)
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
+            .setMtu(MONITOR_MTU)
+            .setBlocking(false)
+            .setMetered(false)
+        // Apps keep using the network's own DNS servers; their queries are relayed like any UDP.
+        dns.forEach { runCatching { builder.addDnsServer(it) } }
+        try {
+            builder.addDisallowedApplication(packageName) // Our relay sockets must not loop back.
+        } catch (_: PackageManager.NameNotFoundException) {
+        }
+
+        val newTunnel = try {
+            builder.establish()
+        } catch (e: Exception) {
+            Log.e(TAG, "establish() failed (monitor)", e)
+            null
+        }
+        if (newTunnel == null) {
+            withContext(Dispatchers.Main) { handleRevoked("VPN permission was removed. Open Gatekeeper to turn it back on.") }
+            return
+        }
+
+        val newForwarder = ForwardingEngine(
+            protector = object : ForwardingEngine.Protector {
+                override fun protect(socket: java.net.Socket) = this@GatekeeperVpnService.protect(socket)
+                override fun protect(socket: java.net.DatagramSocket) = this@GatekeeperVpnService.protect(socket)
+            },
+            toTunnel = java.io.FileOutputStream(newTunnel.fileDescriptor),
+            owners = owners,
+            initialBlocked = blocked,
+            onBlockedPacket = { buf, len -> if (recordConnections) observer.onPacket(buf, len) },
+            finished = finishedConnections,
+        ).also { it.start() }
+
+        val oldTunnel = tunnel
+        val oldDrainer = drainer
+        val oldForwarder = forwarder
+        tunnel = newTunnel
+        appliedPackages = blocked
+        forwarder = newForwarder
+        monitorDns = dns
+        drainer = TunnelDrainer(newTunnel) { buf, len -> newForwarder.enqueue(buf, len) }.also { it.start() }
+        oldDrainer?.shutdown()
+        oldForwarder?.shutdown()
+        oldTunnel?.closeQuietly()
+
+        if (oldForwarder == null) gatekeeper.engine.log(null, "Live monitor on")
+        publish(blocked.size)
+    }
+
+    /** Folds finished relayed connections (one per DNS query, etc.) into log rows. */
+    private suspend fun flushFinishedConnections() {
+        val batch = ArrayList<ConnectionAttempt>()
+        while (true) batch += finishedConnections.poll() ?: break
+        if (batch.isEmpty()) return
+        val rows = batch
+            .groupBy { listOf(it.packageName, it.protocol, it.address, it.port, it.domain) }
+            .map { (_, same) ->
+                same.first().copy(
+                    timeMillis = same.minOf { it.timeMillis },
+                    count = same.size,
+                    bytes = same.sumOf { it.bytes },
+                )
+            }
+        try {
+            gatekeeper.connections.insertAll(rows)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not store relayed connections", e)
+        }
+    }
+
+    private fun watchUnderlyingDns() {
+        if (networkCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                // Gatekeeper itself is never inside its own VPN, so this is the real network.
+                underlyingDns.value = linkProperties.dnsServers.filter { !it.isLinkLocalAddress && !it.isLoopbackAddress }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(callback) }.onSuccess { networkCallback = callback }
+    }
+
+    private fun unwatchUnderlyingDns() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) }
+    }
+
     private fun closeTunnel() {
         appliedPackages = emptySet()
         drainer?.shutdown()
         drainer = null
+        forwarder?.shutdown()
+        forwarder = null
+        monitorDns = null
         tunnel?.closeQuietly()
         tunnel = null
     }
 
     private suspend fun publish(blockedCount: Int) = withContext(Dispatchers.Main) {
         if (stopping) return@withContext
+        val monitoring = forwarder != null
         _status.value = Status(
             running = true,
-            tunnelUp = blockedCount > 0,
+            tunnelUp = blockedCount > 0 || monitoring,
             blockedCount = blockedCount,
             alwaysOn = isAlwaysOn,
             lockdown = isLockdownEnabled,
+            monitoring = monitoring,
         )
-        Notifications.notify(this@GatekeeperVpnService, Notifications.ID_STATUS, Notifications.status(this@GatekeeperVpnService, blockedCount))
+        Notifications.notify(
+            this@GatekeeperVpnService,
+            Notifications.ID_STATUS,
+            Notifications.status(this@GatekeeperVpnService, blockedCount, monitoring),
+        )
     }
 
     private fun goForeground(blockedCount: Int) {
@@ -264,7 +419,12 @@ class GatekeeperVpnService : VpnService() {
         pollerJob = null
         observerJob?.cancel()
         observerJob = null
-        gatekeeper.appScope.launch(Dispatchers.IO) { observer.flush() }
+        _monitoring.value = false
+        unwatchUnderlyingDns()
+        gatekeeper.appScope.launch(Dispatchers.IO) {
+            observer.flush()
+            flushFinishedConnections()
+        }
         unregisterReceivers()
         scope.launch(tunnelDispatcher) { closeTunnel() }
         _status.value = Status()
@@ -277,12 +437,17 @@ class GatekeeperVpnService : VpnService() {
         rulesJob?.cancel()
         pollerJob?.cancel()
         observerJob?.cancel()
+        _monitoring.value = false
+        unwatchUnderlyingDns()
         unregisterReceivers()
         // Close synchronously: the process may die right after onDestroy.
         drainer?.shutdown()
+        forwarder?.shutdown()
         tunnel?.closeQuietly()
         drainer = null
+        forwarder = null
         tunnel = null
+        LiveMonitor.clear()
         _status.value = Status()
         scope.cancel()
         super.onDestroy()
@@ -352,6 +517,8 @@ class GatekeeperVpnService : VpnService() {
         val alwaysOn: Boolean = false,
         /** "Block connections without VPN" is on, which breaks every app we don't tunnel. */
         val lockdown: Boolean = false,
+        /** Live monitor is relaying all traffic. */
+        val monitoring: Boolean = false,
     )
 
     companion object {
@@ -366,9 +533,18 @@ class GatekeeperVpnService : VpnService() {
         private const val TUN_ADDRESS_V6 = "fd00:1:2:3::1"
         private const val TUN_DNS_V4 = "10.111.222.2"
         private const val TUN_DNS_V6 = "fd00:1:2:3::2"
+        private const val MONITOR_MTU = 1500
 
         private val _status = MutableStateFlow(Status())
         val status: StateFlow<Status> = _status.asStateFlow()
+
+        /** Requested live-monitor state. Kept in memory only: every restart begins in normal mode. */
+        private val _monitoring = MutableStateFlow(false)
+        val monitoringRequested: StateFlow<Boolean> = _monitoring.asStateFlow()
+
+        fun setMonitoring(on: Boolean) {
+            _monitoring.value = on
+        }
 
         private fun ParcelFileDescriptor.closeQuietly() {
             try {

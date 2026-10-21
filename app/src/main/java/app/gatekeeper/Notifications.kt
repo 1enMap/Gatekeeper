@@ -48,12 +48,13 @@ object Notifications {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    fun status(context: Context, blockedCount: Int): Notification {
-        val text = when (blockedCount) {
-            0 -> "Gatekeeper active · no apps blocked right now"
-            1 -> "Gatekeeper active · 1 app blocked"
-            else -> "Gatekeeper active · $blockedCount apps blocked"
+    fun status(context: Context, blockedCount: Int, monitoring: Boolean = false): Notification {
+        val blocked = when (blockedCount) {
+            0 -> "no apps blocked right now"
+            1 -> "1 app blocked"
+            else -> "$blockedCount apps blocked"
         }
+        val text = if (monitoring) "Live monitor on · $blocked" else "Gatekeeper active · $blocked"
         return NotificationCompat.Builder(context, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_shield)
             .setContentTitle(text)

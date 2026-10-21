@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.ui.theme.GatekeeperTheme
+import app.gatekeeper.vpn.GatekeeperVpnService
 
 sealed interface Screen {
     data object Home : Screen
@@ -29,6 +30,7 @@ sealed interface Screen {
     data object Audit : Screen
     data object Usage : Screen
     data object Connections : Screen
+    data class Live(val packageName: String?) : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -40,7 +42,9 @@ class MainActivity : ComponentActivity() {
 
     private val vpnConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         viewModel.refreshChecks()
-        if (enableAfterConsent && VpnService.prepare(this) == null) viewModel.setFirewall(true)
+        val granted = VpnService.prepare(this) == null
+        if (enableAfterConsent && granted) viewModel.setFirewall(true)
+        if (!granted) GatekeeperVpnService.setMonitoring(false)
         enableAfterConsent = false
     }
 
@@ -72,8 +76,17 @@ class MainActivity : ComponentActivity() {
                     stateHolder.SaveableStateProvider(screen.toString()) {
                         when (screen) {
                             Screen.Home -> HomeScreen(viewModel, insights, navigate, onToggleFirewall = ::toggleFirewall)
-                            Screen.Apps -> AppListScreen(viewModel, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
-                            is Screen.Detail -> AppDetailScreen(viewModel, insights, screen.packageName, onBack = back)
+                            Screen.Apps -> AppListScreen(
+                                viewModel,
+                                onBack = back,
+                                onOpen = { navigate(Screen.Detail(it)) },
+                                onLive = { navigate(Screen.Live(it)) },
+                            )
+                            is Screen.Detail -> AppDetailScreen(
+                                viewModel, insights, screen.packageName,
+                                onBack = back,
+                                onLive = { navigate(Screen.Live(screen.packageName)) },
+                            )
                             Screen.Onboarding -> OnboardingScreen(
                                 viewModel,
                                 onRequestVpnConsent = ::requestVpnConsent,
@@ -89,6 +102,13 @@ class MainActivity : ComponentActivity() {
                             Screen.Audit -> AuditScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
                             Screen.Usage -> UsageScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
                             Screen.Connections -> ConnectionsScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
+                            is Screen.Live -> LiveScreen(
+                                viewModel, insights, screen.packageName,
+                                onBack = back,
+                                onStart = ::startMonitor,
+                                onStop = { GatekeeperVpnService.setMonitoring(false) },
+                                onOpenApp = { navigate(Screen.Detail(it)) },
+                            )
                         }
                     }
                 }
@@ -110,6 +130,11 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleFirewall(on: Boolean) {
         if (!on) viewModel.setFirewall(false) else requestEnable()
+    }
+
+    private fun startMonitor() {
+        GatekeeperVpnService.setMonitoring(true)
+        if (!GatekeeperVpnService.status.value.running) requestEnable()
     }
 
     private fun requestEnable() {

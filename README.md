@@ -10,7 +10,9 @@ Gatekeeper controls internet access for each app without root. Every installed a
 
 For example, with WhatsApp set to **While open**, no messages arrive in the background, so senders see a single tick until you open WhatsApp.
 
-Gatekeeper has **no `INTERNET` permission**, no analytics, no crash reporting and no third-party SDKs. Rules are stored on the device and excluded from cloud backup and device transfer.
+Gatekeeper never contacts any server of its own: no analytics, no crash reporting, no update checks and no third-party SDKs. Rules and logs are stored on the device and excluded from cloud backup and device transfer.
+
+It holds the `INTERNET` permission for exactly one feature, the **Live monitor**. You start the monitor by hand, and while it runs Gatekeeper relays other apps' traffic so you can see where it goes. In normal mode Gatekeeper relays nothing: it only drops the packets of blocked apps.
 
 ## Building
 
@@ -52,7 +54,7 @@ Stack: Kotlin, Jetpack Compose (Material 3) in a single activity, Room for rules
 
 ## Privacy checkup (security audit, data usage, connection log)
 
-The home screen's **Privacy checkup** card leads to three tools. None of them use the network: Gatekeeper still has no INTERNET permission.
+The home screen's **Privacy checkup** card leads to three tools. None of them use the network.
 
 - **Security audit** runs offline and scores every app *Needs a look* / *Worth checking* / *Looks fine*, explaining each finding:
   - **Special powers** that real Android malware abuses: accessibility access, notification access, device admin.
@@ -66,6 +68,43 @@ The home screen's **Privacy checkup** card leads to three tools. None of them us
 - **Connection log** lists every connection a blocked app tried to make. That includes While open apps in the background, because their packets are dropped inside Gatekeeper's tunnel. Grouped by app or as a timeline, with known ad, analytics and crash-reporting servers labelled from a small built-in list. **Night watch** summarises what blocked apps tried between midnight and 7 am. Entries are kept on the phone for 7 days; recording can be switched off in Settings.
   - With **Private DNS in strict mode** (e.g. `dns.adguard.com`), Android encrypts look-ups even inside the tunnel, so most entries show an IP address and port instead of a name. Set Private DNS to *Automatic* to see names.
 - **Quarantine:** an app's detail screen has a *Quarantine* button that blocks it, so you can watch in the log what it tries to reach.
+
+## Live monitor (see where every app connects)
+
+Tap **Live monitor** on the home screen, or the **ⓘ** button next to any app, then **Start**.
+
+**What changes while the monitor runs:**
+- The VPN switches to a second mode: every app except Gatekeeper is routed into the tunnel.
+- Blocked apps are still dropped.
+- Everything else is relayed by a small user-space TCP/UDP forwarder (`monitor/ForwardingEngine.kt`). It completes each app's TCP handshake itself and copies the byte stream over a real socket that is excluded from the VPN.
+
+**What you see, live, for each connection:**
+- the app;
+- the server name, from the TLS ClientHello (SNI), the HTTP `Host` header or the relayed DNS answers;
+- the address and port;
+- bytes up and down;
+- whether it's still open.
+
+You can view by app or as a list of connections, filter to open connections or trackers, and block an app from the list. Finished connections are also written to the Connection log, marked *let through*.
+
+**Behaviour to know about:**
+- **Only metadata is read.** That means server names and byte counts, never message or page content. HTTPS stays encrypted end to end.
+- **QUIC (UDP 443) is stopped.** QUIC hides server names, so apps fall back to normal TCP connections that can be named.
+- **Ping (ICMP) doesn't work** while monitoring.
+- **It's on demand and never persisted.** It stops when you tap Stop, when the firewall stops, or after a restart. It costs more battery than normal mode.
+- **It only works when Gatekeeper is the active VPN**, like everything else in the app.
+
+The forwarder has JVM tests in `app/src/test/java/app/gatekeeper/monitor/` that drive it with hand-built packets against real local servers:
+- TCP handshake and request/response;
+- a 2 MB download with a lost segment, which must be retransmitted;
+- a 1 MB upload;
+- IPv6 packets;
+- UDP;
+- blocked apps;
+- reset on refused and unknown connections;
+- SNI extraction.
+
+Every packet the engine produces is checksum-verified.
 
 ## Recent activity log
 
@@ -86,7 +125,7 @@ The home screen lists the latest allow/block decisions with timestamps (for exam
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Lets onboarding show the system dialog that stops Android from killing the firewall. |
 | `ACCESS_NETWORK_STATE` | Reads whether Private DNS is on, to explain what the connection log can show. Grants no network access. |
 | `WAKE_LOCK` | Holds the CPU awake for at most the grace period after the screen turns off, so While open apps are re-blocked on time. |
-| `INTERNET` | **Not requested.** It is explicitly stripped from the merged manifest with `tools:node="remove"`. |
+| `INTERNET` | Used **only by the Live monitor**, while you run it, to relay other apps' traffic. Gatekeeper never opens connections of its own. |
 
 ## Setup (also covered by the in-app onboarding)
 
@@ -134,6 +173,7 @@ app/src/main/java/app/gatekeeper/
   data/                     Room (AppRule, RuleDao, AppDatabase), DataStore settings, installed apps
   engine/FirewallEngine.kt  Rules + foreground app → blocked set; grace timers
   insights/                 Security audit, data usage, packet header parser, connection observer, tracker list
+  monitor/                  Live monitor: TCP/UDP forwarding engine, packet builder, SNI/DNS sniffing
   foreground/               Accessibility service, UsageStats fallback, ignore filter
   vpn/                      VpnService and the packet-dropping drainer thread
   receivers/                Boot, package removed, new-app notification actions
@@ -144,6 +184,5 @@ app/src/main/java/app/gatekeeper/
 ## Out of scope for v1
 
 - Separate Wi-Fi and mobile-data rules
-- Connection log for apps that are *not* blocked (would need the INTERNET permission to forward their traffic)
 - Schedules
 - Import and export of rules

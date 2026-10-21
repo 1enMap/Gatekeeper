@@ -131,6 +131,10 @@ fun HomeScreen(
                 Text("Manage apps")
             }
 
+            OutlinedButton(onClick = { navigate(Screen.Live(null)) }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (status.monitoring) "● Live monitor is on: view" else "Live monitor: see where apps connect")
+            }
+
             PrivacyCheckupCard(insights, navigate)
             OutlinedButton(onClick = { navigate(Screen.Onboarding) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Setup guide")

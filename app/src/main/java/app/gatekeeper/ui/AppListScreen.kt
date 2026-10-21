@@ -19,6 +19,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -41,7 +42,7 @@ import app.gatekeeper.R
 import app.gatekeeper.data.Mode
 
 @Composable
-fun AppListScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpen: (String) -> Unit) {
+fun AppListScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpen: (String) -> Unit, onLive: (String) -> Unit) {
     val rows by viewModel.rows.collectAsStateWithLifecycle()
     val filters by viewModel.filters.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
@@ -96,7 +97,7 @@ fun AppListScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpen: (String)
             } else {
                 LazyColumn(Modifier.fillMaxSize(), state = listState) {
                     items(list, key = { it.app.packageName }, contentType = { 0 }) { row ->
-                        AppRowItem(row = row, onOpen = onOpen, onMode = setMode)
+                        AppRowItem(row = row, onOpen = onOpen, onMode = setMode, onLive = onLive)
                     }
                 }
             }
@@ -106,7 +107,7 @@ fun AppListScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpen: (String)
 
 /** One compact line per app; the mode is changed through a small dropdown. */
 @Composable
-private fun AppRowItem(row: AppRow, onOpen: (String) -> Unit, onMode: (String, Mode) -> Unit) {
+private fun AppRowItem(row: AppRow, onOpen: (String) -> Unit, onMode: (String, Mode) -> Unit, onLive: (String) -> Unit) {
     val pkg = row.app.packageName
     Row(
         Modifier
@@ -127,7 +128,9 @@ private fun AppRowItem(row: AppRow, onOpen: (String) -> Unit, onMode: (String, M
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(Modifier.width(8.dp))
+        IconButton(onClick = { onLive(pkg) }) {
+            Icon(painterResource(R.drawable.ic_info), contentDescription = "Live activity")
+        }
         ModeDropdown(row.mode) { onMode(pkg, it) }
     }
 }

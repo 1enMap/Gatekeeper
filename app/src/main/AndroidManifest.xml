@@ -3,13 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        Privacy guarantee: Gatekeeper never talks to the network. It only drops packets.
-        The INTERNET permission is explicitly removed so no library can sneak it back in
-        through manifest merging.
+        Used ONLY by the live monitor, which the user starts by hand: while it runs, other apps'
+        traffic is relayed through Gatekeeper so their connections can be shown. Gatekeeper never
+        opens connections of its own (no analytics, no updates, no servers of ours) and in normal
+        mode it relays nothing at all.
     -->
-    <uses-permission
-        android:name="android.permission.INTERNET"
-        tools:node="remove" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Persistent "Gatekeeper active" notification while the firewall runs. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

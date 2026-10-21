@@ -28,6 +28,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -70,10 +71,13 @@ fun ConnectionsScreen(insights: InsightsViewModel, onBack: () -> Unit, onOpen: (
                         if (data.trackersLast24h > 0) {
                             Text("${data.trackersLast24h} of them went to known ad or tracking servers.")
                         }
+                        if (data.allowedLast24h > 0) {
+                            Text("Plus ${data.allowedLast24h} connections let through while the live monitor was on.")
+                        }
                         Text(
                             "Every connection a blocked app tries (including \"While open\" apps in the " +
-                                "background) is dropped inside Gatekeeper's tunnel and listed here. Kept on " +
-                                "this phone for 7 days.",
+                                "background) is dropped inside Gatekeeper's tunnel and listed here, along with " +
+                                "what the live monitor saw. Kept on this phone for 7 days.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         if (!recording) {
@@ -204,8 +208,14 @@ private fun DestinationLine(d: Destination) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            val outcome = when {
+                d.allowed == 0 -> "blocked"
+                d.allowed == d.count -> "let through"
+                else -> "${d.allowed} let through, ${d.count - d.allowed} blocked"
+            }
+            val size = if (d.bytes > 0) " · ${formatBytes(LocalContext.current, d.bytes)}" else ""
             Text(
-                "${d.protocol} · ${d.count}× · ${relativeTime(d.lastMillis)}",
+                "${d.protocol} · ${d.count}× $outcome$size · ${relativeTime(d.lastMillis)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -227,7 +237,8 @@ private fun TimelineRow(a: ConnectionAttempt, insights: InsightsViewModel) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                "${fmt.format(Date(a.timeMillis))} · ${a.protocol}" + if (a.count > 1) " · ${a.count}×" else "",
+                "${fmt.format(Date(a.timeMillis))} · ${a.protocol} · ${if (a.allowed) "let through" else "blocked"}" +
+                    if (a.count > 1) " · ${a.count}×" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

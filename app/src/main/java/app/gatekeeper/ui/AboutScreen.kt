@@ -35,7 +35,11 @@ fun AboutScreen(onBack: () -> Unit) {
             }
             SectionCard {
                 Text("Privacy", style = MaterialTheme.typography.titleMedium)
-                Bullet("Gatekeeper does not have the Internet permission and cannot send anything anywhere.")
+                Bullet(
+                    "Gatekeeper never contacts any server of its own. It uses the Internet permission only " +
+                        "while you run the Live monitor, to relay other apps' traffic so you can see it.",
+                )
+                Bullet("The Live monitor reads server names and byte counts, never message or page content.")
                 Bullet("No analytics, no crash reporting, no ads.")
                 Bullet("Your rules stay on this device and are excluded from backups.")
                 Bullet("The accessibility service only sees the package name of the app on screen, never its content.")

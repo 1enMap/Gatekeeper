@@ -52,6 +52,9 @@ data class Destination(
     val tracker: String?,
     /** An encrypted DNS (DoT, port 853) look-up: the name it wanted is hidden. */
     val encryptedDns: Boolean,
+    /** How many of [count] were let through by the live monitor (the rest were blocked). */
+    val allowed: Int = 0,
+    val bytes: Long = 0,
 )
 
 data class AppConnections(
@@ -68,8 +71,11 @@ data class NightWatch(val fromMillis: Long, val toMillis: Long, val apps: List<A
 data class ConnectionLog(
     val apps: List<AppConnections>,
     val timeline: List<ConnectionAttempt>,
+    /** Blocked attempts in the last 24 hours. */
     val totalLast24h: Int,
     val trackersLast24h: Int,
+    /** Connections the live monitor let through in the last 24 hours. */
+    val allowedLast24h: Int = 0,
     val nightWatch: NightWatch?,
 )
 
@@ -196,12 +202,14 @@ class InsightsViewModel(application: Application) : AndroidViewModel(application
         val now = System.currentTimeMillis()
         val dayAgo = now - 24L * 60 * 60 * 1000
         val last24 = rows.filter { it.timeMillis >= dayAgo }
+        val blocked24 = last24.filter { !it.allowed }
         return ConnectionLog(
             apps = group(rows),
             timeline = rows.take(TIMELINE_LIMIT),
-            totalLast24h = last24.sumOf { it.count },
-            trackersLast24h = last24.filter { TrackerDomains.categoryOf(it.domain) != null }.sumOf { it.count },
-            nightWatch = nightWatch(rows, now),
+            totalLast24h = blocked24.sumOf { it.count },
+            trackersLast24h = blocked24.filter { TrackerDomains.categoryOf(it.domain) != null }.sumOf { it.count },
+            allowedLast24h = last24.filter { it.allowed }.sumOf { it.count },
+            nightWatch = nightWatch(rows.filter { !it.allowed }, now),
         )
     }
 
@@ -218,6 +226,8 @@ class InsightsViewModel(application: Application) : AndroidViewModel(application
                         lastMillis = same.maxOf { it.timeMillis },
                         tracker = TrackerDomains.categoryOf(first.domain),
                         encryptedDns = first.domain == null && first.port == 853,
+                        allowed = same.filter { it.allowed }.sumOf { it.count },
+                        bytes = same.sumOf { it.bytes },
                     )
                 }
                 .sortedByDescending { it.count }

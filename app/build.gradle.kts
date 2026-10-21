@@ -50,6 +50,11 @@ android {
         compose = true
     }
 
+    testOptions {
+        // android.util.Log etc. return defaults in JVM tests instead of throwing.
+        unitTests.isReturnDefaultValues = true
+    }
+
     // No dependency metadata blob: nothing about this build is sent anywhere.
     dependenciesInfo {
         includeInApk = false

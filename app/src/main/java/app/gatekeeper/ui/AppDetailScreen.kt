@@ -28,10 +28,17 @@ import app.gatekeeper.data.Mode
 import app.gatekeeper.insights.Risk
 import app.gatekeeper.insights.TrackerDomains
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Button
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-fun AppDetailScreen(viewModel: MainViewModel, insights: InsightsViewModel, packageName: String, onBack: () -> Unit) {
+fun AppDetailScreen(
+    viewModel: MainViewModel,
+    insights: InsightsViewModel,
+    packageName: String,
+    onBack: () -> Unit,
+    onLive: () -> Unit,
+) {
     val rows by viewModel.allRows.collectAsStateWithLifecycle()
     val audits by insights.audit.collectAsStateWithLifecycle()
     val weekUsage by insights.weekUsage.collectAsStateWithLifecycle()
@@ -65,11 +72,16 @@ fun AppDetailScreen(viewModel: MainViewModel, insights: InsightsViewModel, packa
                     Text(row.app.label, style = MaterialTheme.typography.titleLarge)
                     Text(packageName, style = MaterialTheme.typography.bodySmall)
                     Text(
-                        if (row.hasInternetNow) "Has internet right now" else "Blocked right now",
+                        // This is what Gatekeeper permits, not whether the app is currently connecting.
+                        if (row.hasInternetNow) "Allowed to use the internet" else "Blocked right now",
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (row.hasInternetNow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                     )
                 }
+            }
+
+            Button(onClick = onLive, modifier = Modifier.fillMaxWidth()) {
+                Text("Live activity: see where it connects")
             }
 
             SectionCard {
@@ -146,7 +158,7 @@ fun AppDetailScreen(viewModel: MainViewModel, insights: InsightsViewModel, packa
             if (attempts.isNotEmpty()) {
                 SectionCard {
                     Text(
-                        "Blocked connection attempts (${attempts.sumOf { it.count }})",
+                        "Recorded connections (${attempts.sumOf { it.count }})",
                         style = MaterialTheme.typography.titleMedium,
                     )
                     attempts.take(15).forEach { a ->
@@ -154,7 +166,8 @@ fun AppDetailScreen(viewModel: MainViewModel, insights: InsightsViewModel, packa
                             Column(Modifier.weight(1f)) {
                                 Text(a.domain ?: "${a.address}:${a.port}", style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    "${a.protocol} · ${relativeTime(a.timeMillis)}" + if (a.count > 1) " · ${a.count}×" else "",
+                                    "${a.protocol} · ${if (a.allowed) "let through" else "blocked"} · ${relativeTime(a.timeMillis)}" +
+                                        if (a.count > 1) " · ${a.count}×" else "",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

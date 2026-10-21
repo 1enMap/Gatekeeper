@@ -2,6 +2,7 @@ package app.gatekeeper.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.R
 import app.gatekeeper.data.Mode
+import app.gatekeeper.insights.Risk
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -32,6 +34,7 @@ import java.util.Locale
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
+    insights: InsightsViewModel,
     navigate: (Screen) -> Unit,
     onToggleFirewall: (Boolean) -> Unit,
 ) {
@@ -127,6 +130,8 @@ fun HomeScreen(
             Button(onClick = { navigate(Screen.Apps) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Manage apps")
             }
+
+            PrivacyCheckupCard(insights, navigate)
             OutlinedButton(onClick = { navigate(Screen.Onboarding) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Setup guide")
             }
@@ -156,6 +161,56 @@ fun HomeScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivacyCheckupCard(insights: InsightsViewModel, navigate: (Screen) -> Unit) {
+    val context = LocalContext.current
+    val audit by insights.audit.collectAsStateWithLifecycle()
+    val top by insights.topBackground.collectAsStateWithLifecycle()
+    val usage by insights.usage.collectAsStateWithLifecycle()
+    val log by insights.connections.collectAsStateWithLifecycle()
+
+    SectionCard {
+        Text("Privacy checkup", style = MaterialTheme.typography.titleMedium)
+        val apps = audit?.filter { !it.isSystem }
+        if (apps == null) {
+            Text("Checking your apps…", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            val high = apps.count { it.risk == Risk.HIGH }
+            val medium = apps.count { it.risk == Risk.MEDIUM }
+            StatusLine(
+                ok = high == 0,
+                text = if (high == 0) "No apps need urgent attention" else "$high ${if (high == 1) "app needs" else "apps need"} a look",
+            )
+            if (medium > 0) StatusLine(ok = false, warn = true, text = "$medium worth checking")
+        }
+        when {
+            usage == UsageState.NeedsPermission ->
+                StatusLine(ok = false, warn = true, text = "Grant Usage Access to see which apps use data in the background")
+            top != null -> top?.let {
+                StatusLine(
+                    ok = true,
+                    text = "Most background data this week: ${it.label} (${formatBytes(context, it.row.background)})",
+                )
+            }
+        }
+        log?.let {
+            val trackers = if (it.trackersLast24h > 0) ", ${it.trackersLast24h} to trackers" else ""
+            StatusLine(ok = true, text = "Blocked apps tried ${it.totalLast24h} connections in 24 h$trackers")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { navigate(Screen.Audit) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                Text("Audit", maxLines = 1)
+            }
+            OutlinedButton(onClick = { navigate(Screen.Usage) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                Text("Data use", maxLines = 1)
+            }
+            OutlinedButton(onClick = { navigate(Screen.Connections) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
+                Text("Log", maxLines = 1)
             }
         }
     }

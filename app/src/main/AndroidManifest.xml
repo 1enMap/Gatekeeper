@@ -34,6 +34,8 @@
     <!-- Keeps the CPU awake for at most the grace period after the screen turns off,
          so "Only while open" apps are re-blocked on time. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Reads whether Private DNS is on (to explain the connection log). No network access. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".GatekeeperApp"

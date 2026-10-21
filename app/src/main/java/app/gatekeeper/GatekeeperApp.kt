@@ -2,6 +2,7 @@ package app.gatekeeper
 
 import android.app.Application
 import app.gatekeeper.data.AppDatabase
+import app.gatekeeper.data.ConnectionDao
 import app.gatekeeper.data.Mode
 import app.gatekeeper.data.RuleRepository
 import app.gatekeeper.data.Settings
@@ -21,6 +22,8 @@ class GatekeeperApp : Application() {
         private set
     lateinit var rules: RuleRepository
         private set
+    lateinit var connections: ConnectionDao
+        private set
     lateinit var engine: FirewallEngine
         private set
     lateinit var foregroundFilter: ForegroundFilter
@@ -29,7 +32,9 @@ class GatekeeperApp : Application() {
     override fun onCreate() {
         super.onCreate()
         settings = Settings(this)
-        rules = RuleRepository(AppDatabase.create(this).ruleDao(), packageName)
+        val db = AppDatabase.create(this)
+        rules = RuleRepository(db.ruleDao(), packageName)
+        connections = db.connectionDao()
         engine = FirewallEngine(this, rules, appScope)
         foregroundFilter = ForegroundFilter(this)
         Notifications.createChannels(this)

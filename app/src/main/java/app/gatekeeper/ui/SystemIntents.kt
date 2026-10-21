@@ -38,6 +38,11 @@ object SystemIntents {
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()),
     )
 
+    fun openAppDetailsFor(context: Context, packageName: String) = launchFirst(
+        context,
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$packageName".toUri()),
+    )
+
     fun openNotificationSettings(context: Context) = launchFirst(
         context,
         Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),

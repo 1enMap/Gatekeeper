@@ -27,7 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.data.AppRule
 
 @Composable
-fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onRunSetup: () -> Unit) {
+fun SettingsScreen(viewModel: MainViewModel, insights: InsightsViewModel, onBack: () -> Unit, onRunSetup: () -> Unit) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val checks by viewModel.checks.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -80,6 +80,21 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit, onRunSetup: () 
                     StatusLine(ok = false, text = "Usage Access permission not granted")
                     OutlinedButton(onClick = { SystemIntents.openUsageAccessSettings(context) }) { Text("Grant Usage Access") }
                 }
+            }
+
+            SectionCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Record blocked connection attempts", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Keeps a list of the servers blocked apps try to reach, on this phone only, " +
+                                "for 7 days.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(checked = s.recordConnections, onCheckedChange = { insights.setRecording(it) })
+                }
+                OutlinedButton(onClick = { insights.clearLog() }) { Text("Clear connection log") }
             }
 
             OutlinedButton(onClick = onRunSetup, modifier = Modifier.fillMaxWidth()) { Text("Run setup guide again") }

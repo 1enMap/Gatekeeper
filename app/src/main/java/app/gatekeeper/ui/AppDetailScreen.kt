@@ -25,10 +25,18 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.data.AppRule
 import app.gatekeeper.data.Mode
+import app.gatekeeper.insights.Risk
+import app.gatekeeper.insights.TrackerDomains
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
-fun AppDetailScreen(viewModel: MainViewModel, packageName: String, onBack: () -> Unit) {
+fun AppDetailScreen(viewModel: MainViewModel, insights: InsightsViewModel, packageName: String, onBack: () -> Unit) {
     val rows by viewModel.allRows.collectAsStateWithLifecycle()
+    val audits by insights.audit.collectAsStateWithLifecycle()
+    val weekUsage by insights.weekUsage.collectAsStateWithLifecycle()
+    val attempts by remember(packageName) { insights.connectionsFor(packageName) }.collectAsStateWithLifecycle(emptyList())
+    val context = LocalContext.current
     val row = rows?.firstOrNull { it.app.packageName == packageName }
 
     Scaffold(topBar = { GatekeeperTopBar(row?.app?.label ?: packageName, onBack = onBack) }) { padding ->
@@ -76,6 +84,11 @@ fun AppDetailScreen(viewModel: MainViewModel, packageName: String, onBack: () ->
                     },
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                if (row.mode != Mode.BLOCKED) {
+                    OutlinedButton(onClick = { viewModel.setMode(packageName, Mode.BLOCKED) }) {
+                        Text("Quarantine: block it and watch what it tries")
+                    }
+                }
             }
 
             SectionCard {
@@ -93,6 +106,63 @@ fun AppDetailScreen(viewModel: MainViewModel, packageName: String, onBack: () ->
                         "so messages you just sent still go out.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+            }
+
+            audits?.firstOrNull { it.packageName == packageName }?.let { audit ->
+                SectionCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Security check", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Pill(audit.risk.label, audit.risk.color)
+                    }
+                    audit.findings.forEach { f ->
+                        Row {
+                            Text(if (f.good) "✓" else "●", color = if (f.good) Risk.LOW.color else f.severity.color)
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(f.title, style = MaterialTheme.typography.bodyMedium)
+                                Text(f.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    if (audit.findings.isEmpty()) Text("Nothing notable.", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedButton(onClick = { SystemIntents.openAppDetailsFor(context, packageName) }) {
+                        Text("Review permissions in Android settings")
+                    }
+                }
+            }
+
+            weekUsage[row.app.uid]?.let { usage ->
+                SectionCard {
+                    Text("Data used in the last 7 days", style = MaterialTheme.typography.titleMedium)
+                    Text("In the background: ${formatBytes(context, usage.background)}")
+                    Text("While on screen: ${formatBytes(context, usage.foreground)}")
+                    Text(
+                        "Wi-Fi ${formatBytes(context, usage.wifi)} · Mobile ${formatBytes(context, usage.mobile)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
+            if (attempts.isNotEmpty()) {
+                SectionCard {
+                    Text(
+                        "Blocked connection attempts (${attempts.sumOf { it.count }})",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    attempts.take(15).forEach { a ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(a.domain ?: "${a.address}:${a.port}", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "${a.protocol} · ${relativeTime(a.timeMillis)}" + if (a.count > 1) " · ${a.count}×" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TrackerDomains.categoryOf(a.domain)?.let { Pill(it, TrackerColor) }
+                        }
+                    }
+                }
             }
 
             if (shared.isNotEmpty()) {

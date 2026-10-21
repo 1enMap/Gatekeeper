@@ -18,6 +18,7 @@ import app.gatekeeper.data.InstalledApps
 import app.gatekeeper.foreground.ForegroundAccessibilityService
 import app.gatekeeper.foreground.UsageStatsPoller
 import app.gatekeeper.gatekeeper
+import app.gatekeeper.insights.TrafficObserver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,6 +26,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,6 +61,14 @@ class GatekeeperVpnService : VpnService() {
 
     private var rulesJob: Job? = null
     private var pollerJob: Job? = null
+    private var observerJob: Job? = null
+
+    /** Packages in the current tunnel; read by the observer on the drainer thread. */
+    @Volatile private var appliedPackages: Set<String> = emptySet()
+    @Volatile private var recordConnections = true
+    private val observer by lazy {
+        TrafficObserver(this, gatekeeper.connections) { appliedPackages }
+    }
     private var receiversRegistered = false
     private var stopping = false
 
@@ -99,6 +109,17 @@ class GatekeeperVpnService : VpnService() {
             .stateIn(scope, SharingStarted.Eagerly, false)
         pollerJob = UsageStatsPoller(this).start(scope) {
             fallbackEnabled.value && !ForegroundAccessibilityService.running.value
+        }
+
+        observerJob = scope.launch {
+            launch { gatekeeper.settings.state.collect { recordConnections = it.recordConnections } }
+            withContext(Dispatchers.IO) {
+                gatekeeper.connections.deleteOlderThan(System.currentTimeMillis() - LOG_RETENTION_MS)
+            }
+            while (true) {
+                delay(LOG_FLUSH_MS)
+                withContext(Dispatchers.IO) { observer.flush() }
+            }
         }
     }
 
@@ -168,7 +189,10 @@ class GatekeeperVpnService : VpnService() {
         val oldTunnel = tunnel
         val oldDrainer = drainer
         tunnel = newTunnel
-        drainer = TunnelDrainer(newTunnel).also { it.start() }
+        appliedPackages = applied
+        drainer = TunnelDrainer(newTunnel) { buf, len ->
+            if (recordConnections) observer.onPacket(buf, len)
+        }.also { it.start() }
         oldDrainer?.shutdown()
         oldTunnel?.closeQuietly()
 
@@ -177,6 +201,7 @@ class GatekeeperVpnService : VpnService() {
     }
 
     private fun closeTunnel() {
+        appliedPackages = emptySet()
         drainer?.shutdown()
         drainer = null
         tunnel?.closeQuietly()
@@ -237,6 +262,9 @@ class GatekeeperVpnService : VpnService() {
         rulesJob = null
         pollerJob?.cancel()
         pollerJob = null
+        observerJob?.cancel()
+        observerJob = null
+        gatekeeper.appScope.launch(Dispatchers.IO) { observer.flush() }
         unregisterReceivers()
         scope.launch(tunnelDispatcher) { closeTunnel() }
         _status.value = Status()
@@ -248,6 +276,7 @@ class GatekeeperVpnService : VpnService() {
         stopping = true
         rulesJob?.cancel()
         pollerJob?.cancel()
+        observerJob?.cancel()
         unregisterReceivers()
         // Close synchronously: the process may die right after onDestroy.
         drainer?.shutdown()
@@ -331,6 +360,8 @@ class GatekeeperVpnService : VpnService() {
         const val ACTION_STOP = "app.gatekeeper.STOP"
 
         private const val REBUILD_DEBOUNCE_MS = 300L
+        private const val LOG_FLUSH_MS = 10_000L
+        private const val LOG_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
         private const val TUN_ADDRESS_V4 = "10.111.222.1"
         private const val TUN_ADDRESS_V6 = "fd00:1:2:3::1"
         private const val TUN_DNS_V4 = "10.111.222.2"

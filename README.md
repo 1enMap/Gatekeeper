@@ -50,6 +50,23 @@ Stack: Kotlin, Jetpack Compose (Material 3) in a single activity, Room for rules
    - **Switching to Gatekeeper** counts as leaving the current app (Gatekeeper is not ignored as a foreground app, so checking its status doesn't keep a While open app online).
    - **Screen off:** turning the screen off counts as leaving the app and starts its grace timer. A wake lock, held for at most the grace period, makes sure the timer fires on time. Unlocking the phone restores the app you were in.
 
+## Privacy checkup (security audit, data usage, connection log)
+
+The home screen's **Privacy checkup** card leads to three tools. None of them use the network: Gatekeeper still has no INTERNET permission.
+
+- **Security audit** runs offline and scores every app *Needs a look* / *Worth checking* / *Looks fine*, explaining each finding:
+  - **Special powers** that real Android malware abuses: accessibility access, notification access, device admin.
+  - **Sensitive permissions** it holds (location, background location, SMS, microphone, call logs, contacts…), weighed by whether the app can go online at all.
+  - **Where it came from:** app store vs. APK, and test-signed (often modified) builds.
+  - **Look-alikes** of popular apps, such as a "WhatsApp" that isn't `com.whatsapp`, or WhatsApp/Instagram mods.
+  - **Background data use** over the last 7 days.
+
+  A flag means "have a look", not "this is malware". Each app's detail screen lists the findings and links to its Android permission settings.
+- **Data usage** shows Android's own per-app counters (the same data as Settings → Data usage), split into *background* vs *on screen* and Wi-Fi vs mobile, for 24 hours, 7 days or 30 days. Needs Usage Access.
+- **Connection log** lists every connection a blocked app tried to make. That includes While open apps in the background, because their packets are dropped inside Gatekeeper's tunnel. Grouped by app or as a timeline, with known ad, analytics and crash-reporting servers labelled from a small built-in list. **Night watch** summarises what blocked apps tried between midnight and 7 am. Entries are kept on the phone for 7 days; recording can be switched off in Settings.
+  - With **Private DNS in strict mode** (e.g. `dns.adguard.com`), Android encrypts look-ups even inside the tunnel, so most entries show an IP address and port instead of a name. Set Private DNS to *Automatic* to see names.
+- **Quarantine:** an app's detail screen has a *Quarantine* button that blocks it, so you can watch in the log what it tries to reach.
+
 ## Recent activity log
 
 The home screen lists the latest allow/block decisions with timestamps (for example "WhatsApp · Left the app: blocked in 30 s"), so you can check While open behaviour without a computer. The log is kept in memory only and cleared when the app restarts.
@@ -64,9 +81,10 @@ The home screen lists the latest allow/block decisions with timestamps (for exam
 | `RECEIVE_BOOT_COMPLETED` | Restarts the firewall after a reboot, but only if the master switch was on. |
 | `POST_NOTIFICATIONS` | Status notification, the "firewall stopped" alert, and the Allow / Block / While open prompt for newly installed apps. |
 | `QUERY_ALL_PACKAGES` | A firewall needs to list every installed app. |
-| `PACKAGE_USAGE_STATS` (Usage Access, optional) | Used only for the fallback foreground detection, if you decline accessibility. |
+| `PACKAGE_USAGE_STATS` (Usage Access, optional) | Fallback foreground detection if you decline accessibility, and the per-app numbers on the Data usage screen. |
 | Accessibility service (optional, recommended) | Detects which app is open so it can be allowed internet. No screen content is read. |
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Lets onboarding show the system dialog that stops Android from killing the firewall. |
+| `ACCESS_NETWORK_STATE` | Reads whether Private DNS is on, to explain what the connection log can show. Grants no network access. |
 | `WAKE_LOCK` | Holds the CPU awake for at most the grace period after the screen turns off, so While open apps are re-blocked on time. |
 | `INTERNET` | **Not requested.** It is explicitly stripped from the merged manifest with `tools:node="remove"`. |
 
@@ -115,6 +133,7 @@ app/src/main/java/app/gatekeeper/
   Notifications.kt          Channels, status, "stopped" and "new app" notifications
   data/                     Room (AppRule, RuleDao, AppDatabase), DataStore settings, installed apps
   engine/FirewallEngine.kt  Rules + foreground app → blocked set; grace timers
+  insights/                 Security audit, data usage, packet header parser, connection observer, tracker list
   foreground/               Accessibility service, UsageStats fallback, ignore filter
   vpn/                      VpnService and the packet-dropping drainer thread
   receivers/                Boot, package removed, new-app notification actions
@@ -125,6 +144,6 @@ app/src/main/java/app/gatekeeper/
 ## Out of scope for v1
 
 - Separate Wi-Fi and mobile-data rules
-- Connection log (requires packet and DNS parsing)
+- Connection log for apps that are *not* blocked (would need the INTERNET permission to forward their traffic)
 - Schedules
 - Import and export of rules

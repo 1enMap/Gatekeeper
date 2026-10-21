@@ -22,6 +22,8 @@ data class SettingsState(
     /** Poll UsageStatsManager when the accessibility service is not running. */
     val usageStatsFallback: Boolean = false,
     val onboardingDone: Boolean = false,
+    /** Keep a local log of the servers blocked apps try to reach. */
+    val recordConnections: Boolean = true,
 )
 
 class Settings(context: Context) {
@@ -34,6 +36,7 @@ class Settings(context: Context) {
             defaultGraceSeconds = p[DEFAULT_GRACE] ?: AppRule.DEFAULT_GRACE_SECONDS,
             usageStatsFallback = p[USAGE_FALLBACK] ?: false,
             onboardingDone = p[ONBOARDING_DONE] ?: false,
+            recordConnections = p[RECORD_CONNECTIONS] ?: true,
         )
     }
 
@@ -45,6 +48,7 @@ class Settings(context: Context) {
         store.edit { it[DEFAULT_GRACE] = value.coerceIn(0, AppRule.MAX_GRACE_SECONDS) }
     suspend fun setUsageStatsFallback(value: Boolean) = store.edit { it[USAGE_FALLBACK] = value }
     suspend fun setOnboardingDone(value: Boolean) = store.edit { it[ONBOARDING_DONE] = value }
+    suspend fun setRecordConnections(value: Boolean) = store.edit { it[RECORD_CONNECTIONS] = value }
 
     private companion object {
         val FIREWALL_ENABLED = booleanPreferencesKey("firewall_enabled")
@@ -52,5 +56,6 @@ class Settings(context: Context) {
         val DEFAULT_GRACE = intPreferencesKey("default_grace_seconds")
         val USAGE_FALLBACK = booleanPreferencesKey("usage_stats_fallback")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+        val RECORD_CONNECTIONS = booleanPreferencesKey("record_connections")
     }
 }

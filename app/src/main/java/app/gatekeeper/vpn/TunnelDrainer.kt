@@ -16,7 +16,11 @@ import java.io.InterruptedIOException
  * The thread sleeps in poll() on the tunnel plus a wake-up pipe, so it costs nothing while
  * idle and can be stopped instantly without relying on close() interrupting a blocking read.
  */
-class TunnelDrainer(tunnel: ParcelFileDescriptor) : Thread("tunnel-drainer") {
+class TunnelDrainer(
+    tunnel: ParcelFileDescriptor,
+    /** Sees each dropped packet before it is discarded (for the connection log). */
+    private val onPacket: ((ByteArray, Int) -> Unit)? = null,
+) : Thread("tunnel-drainer") {
     private val tunFd: FileDescriptor = tunnel.fileDescriptor
     private val wakeRead: FileDescriptor
     private val wakeWrite: FileDescriptor
@@ -57,11 +61,18 @@ class TunnelDrainer(tunnel: ParcelFileDescriptor) : Thread("tunnel-drainer") {
         }
     }
 
-    /** Reads until the non-blocking tunnel reports EAGAIN. Packets are discarded. */
+    /** Reads until the non-blocking tunnel reports EAGAIN. Packets are discarded after [onPacket]. */
     private fun drainAvailable(buffer: ByteArray) {
         while (!stopped) {
             try {
-                if (Os.read(tunFd, buffer, 0, buffer.size) <= 0) return
+                val n = Os.read(tunFd, buffer, 0, buffer.size)
+                if (n <= 0) return
+                // The packet is dropped either way; a logging bug must never stop the drain loop.
+                try {
+                    onPacket?.invoke(buffer, n)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Packet observer failed", e)
+                }
             } catch (e: ErrnoException) {
                 if (e.errno == OsConstants.EAGAIN) return
                 if (e.errno == OsConstants.EINTR) continue

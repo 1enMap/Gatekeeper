@@ -26,10 +26,14 @@ sealed interface Screen {
     data object Onboarding : Screen
     data object Settings : Screen
     data object About : Screen
+    data object Audit : Screen
+    data object Usage : Screen
+    data object Connections : Screen
 }
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
+    private val insights: InsightsViewModel by viewModels()
 
     /** Turn the firewall on after the user accepts the VPN consent dialog. */
     private var enableAfterConsent = false
@@ -67,9 +71,9 @@ class MainActivity : ComponentActivity() {
                     val screen = backStack.last()
                     stateHolder.SaveableStateProvider(screen.toString()) {
                         when (screen) {
-                            Screen.Home -> HomeScreen(viewModel, navigate, onToggleFirewall = ::toggleFirewall)
+                            Screen.Home -> HomeScreen(viewModel, insights, navigate, onToggleFirewall = ::toggleFirewall)
                             Screen.Apps -> AppListScreen(viewModel, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
-                            is Screen.Detail -> AppDetailScreen(viewModel, screen.packageName, onBack = back)
+                            is Screen.Detail -> AppDetailScreen(viewModel, insights, screen.packageName, onBack = back)
                             Screen.Onboarding -> OnboardingScreen(
                                 viewModel,
                                 onRequestVpnConsent = ::requestVpnConsent,
@@ -80,8 +84,11 @@ class MainActivity : ComponentActivity() {
                                     backStack.add(Screen.Home)
                                 },
                             )
-                            Screen.Settings -> SettingsScreen(viewModel, onBack = back, onRunSetup = { navigate(Screen.Onboarding) })
+                            Screen.Settings -> SettingsScreen(viewModel, insights, onBack = back, onRunSetup = { navigate(Screen.Onboarding) })
                             Screen.About -> AboutScreen(onBack = back)
+                            Screen.Audit -> AuditScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
+                            Screen.Usage -> UsageScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
+                            Screen.Connections -> ConnectionsScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
                         }
                     }
                 }
@@ -98,6 +105,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         viewModel.refreshChecks()
         viewModel.refreshApps()
+        insights.refresh()
     }
 
     private fun toggleFirewall(on: Boolean) {

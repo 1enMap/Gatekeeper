@@ -15,6 +15,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.ui.theme.GatekeeperTheme
 
@@ -60,22 +61,28 @@ class MainActivity : ComponentActivity() {
                     val back: () -> Unit = { if (backStack.size > 1) backStack.removeAt(backStack.lastIndex) else finish() }
                     BackHandler(enabled = backStack.size > 1) { back() }
 
-                    when (val screen = backStack.last()) {
-                        Screen.Home -> HomeScreen(viewModel, navigate, onToggleFirewall = ::toggleFirewall)
-                        Screen.Apps -> AppListScreen(viewModel, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
-                        is Screen.Detail -> AppDetailScreen(viewModel, screen.packageName, onBack = back)
-                        Screen.Onboarding -> OnboardingScreen(
-                            viewModel,
-                            onRequestVpnConsent = ::requestVpnConsent,
-                            onRequestNotifications = ::requestNotifications,
-                            onFinish = {
-                                viewModel.setOnboardingDone(true)
-                                backStack.clear()
-                                backStack.add(Screen.Home)
-                            },
-                        )
-                        Screen.Settings -> SettingsScreen(viewModel, onBack = back, onRunSetup = { navigate(Screen.Onboarding) })
-                        Screen.About -> AboutScreen(onBack = back)
+                    // Keeps each screen's saved state (e.g. the app list's scroll position)
+                    // while another screen is on top of it.
+                    val stateHolder = rememberSaveableStateHolder()
+                    val screen = backStack.last()
+                    stateHolder.SaveableStateProvider(screen.toString()) {
+                        when (screen) {
+                            Screen.Home -> HomeScreen(viewModel, navigate, onToggleFirewall = ::toggleFirewall)
+                            Screen.Apps -> AppListScreen(viewModel, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
+                            is Screen.Detail -> AppDetailScreen(viewModel, screen.packageName, onBack = back)
+                            Screen.Onboarding -> OnboardingScreen(
+                                viewModel,
+                                onRequestVpnConsent = ::requestVpnConsent,
+                                onRequestNotifications = ::requestNotifications,
+                                onFinish = {
+                                    viewModel.setOnboardingDone(true)
+                                    backStack.clear()
+                                    backStack.add(Screen.Home)
+                                },
+                            )
+                            Screen.Settings -> SettingsScreen(viewModel, onBack = back, onRunSetup = { navigate(Screen.Onboarding) })
+                            Screen.About -> AboutScreen(onBack = back)
+                        }
                     }
                 }
             }

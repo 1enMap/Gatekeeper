@@ -22,6 +22,15 @@ Requirements: JDK 17 or newer and the Android SDK with platform 36 (Android Stud
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+For daily use, install the **release** build: it is minified and much smoother than the debug build (Compose debug builds are noticeably laggy).
+
+```bash
+./gradlew assembleRelease
+# APK: app/build/outputs/apk/release/app-release.apk
+```
+
+Both builds are signed with the test key in `keystore/`, so any build from this repo installs over the previous one and keeps your rules. Replace that key with your own private one before publishing anywhere.
+
 If you build from the command line without Android Studio, create `local.properties` with `sdk.dir=/path/to/Android/Sdk` or set `ANDROID_HOME`.
 
 Stack: Kotlin, Jetpack Compose (Material 3) in a single activity, Room for rules, DataStore for settings, and Coroutines/Flow. minSdk 29 (Android 10), targetSdk 36.
@@ -81,8 +90,11 @@ The home screen lists the latest allow/block decisions with timestamps (for exam
 - Apps in **While open** mode get no notifications and no incoming calls in the background. That is the point, but you should know it.
 - Linked devices, such as WhatsApp Web or Desktop, can still receive messages and show double ticks.
 - Apps that share a Linux UID with other apps are blocked or allowed together. The app detail screen tells you when this applies.
+- **Cloned apps (Vivo App Clone / Dual apps)** run in a separate Android user. Gatekeeper's VPN only covers the main user, so the clone is not blocked. The clone also has the same package name as the original, so opening the clone counts as opening the original and gives the original internet. Don't use a clone to send test messages to the original on the same phone.
 
 ## Test checklist
+
+Before testing WhatsApp, log out linked devices (WhatsApp → Linked devices) or quit them fully. A linked Mac or browser receives messages on its own and turns the ticks double even while the phone is blocked.
 
 - [ ] Set WhatsApp to "While open" and have a second phone send a message: one tick. Open WhatsApp: the message arrives and the ticks turn double.
 - [ ] Inside a "While open" app, open and close the keyboard: the app is not blocked.

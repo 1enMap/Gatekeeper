@@ -17,8 +17,24 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        // Test key shared by debug and release builds so every APK built from this repo, on any
+        // machine, installs over the previous one without losing rules. Before publishing to a
+        // store, replace it with your own private key and keep that out of the repository.
+        create("test") {
+            storeFile = rootProject.file("keystore/gatekeeper-test.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("test")
+        }
         release {
+            signingConfig = signingConfigs.getByName("test")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

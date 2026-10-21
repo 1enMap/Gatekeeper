@@ -113,6 +113,7 @@ class GatekeeperVpnService : VpnService() {
         if (targets.isEmpty()) {
             // A Builder with zero allowed apps would route EVERY app into the tunnel and kill all
             // internet. With nothing to block we simply keep no tunnel at all.
+            if (tunnel != null) gatekeeper.engine.log(null, "Firewall idle: nothing to block")
             closeTunnel()
             publish(0)
             return
@@ -171,7 +172,7 @@ class GatekeeperVpnService : VpnService() {
         oldDrainer?.shutdown()
         oldTunnel?.closeQuietly()
 
-        Log.d(TAG, "Tunnel rebuilt, ${applied.size} apps blocked")
+        gatekeeper.engine.log(null, "Firewall updated: ${applied.size} apps blocked")
         publish(applied.size)
     }
 
@@ -223,6 +224,7 @@ class GatekeeperVpnService : VpnService() {
     private fun handleRevoked(reason: String) {
         if (stopping) return
         Log.i(TAG, "VPN revoked: $reason")
+        gatekeeper.engine.log(null, "Firewall stopped: $reason")
         scope.launch { gatekeeper.settings.setFirewallEnabled(false) }
         Notifications.showStopped(this, reason)
         shutdown()

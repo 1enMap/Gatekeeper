@@ -14,6 +14,7 @@ import app.gatekeeper.data.InstalledApp
 import app.gatekeeper.data.InstalledApps
 import app.gatekeeper.data.Mode
 import app.gatekeeper.data.SettingsState
+import app.gatekeeper.engine.ActivityEntry
 import app.gatekeeper.foreground.ForegroundAccessibilityService
 import app.gatekeeper.foreground.UsageStatsPoller
 import app.gatekeeper.gatekeeper
@@ -61,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val vpnStatus: StateFlow<GatekeeperVpnService.Status> = GatekeeperVpnService.status
     val accessibilityRunning: StateFlow<Boolean> = ForegroundAccessibilityService.running
+    val activity: StateFlow<List<ActivityEntry>> = app.engine.activity
 
     private val _checks = MutableStateFlow(SystemChecks())
     val checks: StateFlow<SystemChecks> = _checks.asStateFlow()

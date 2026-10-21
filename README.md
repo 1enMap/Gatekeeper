@@ -38,7 +38,12 @@ Stack: Kotlin, Jetpack Compose (Material 3) in a single activity, Room for rules
 3. **Foreground detection.**
    - **Primary: `ForegroundAccessibilityService`.** It listens only to `typeWindowStateChanged` with `canRetrieveWindowContent="false"`, so it sees package names and nothing else. Events from System UI, all enabled keyboards, Gatekeeper itself, permission dialogs, toasts and other non-launchable overlays are ignored. This means opening the keyboard inside WhatsApp doesn't count as leaving WhatsApp.
    - **Fallback: `UsageStatsPoller`.** If you decline accessibility, Gatekeeper reads `UsageStatsManager.queryEvents` every 1.5 s. This mode reacts more slowly.
+   - **Switching to Gatekeeper** counts as leaving the current app (Gatekeeper is not ignored as a foreground app, so checking its status doesn't keep a While open app online).
    - **Screen off:** turning the screen off counts as leaving the app and starts its grace timer. A wake lock, held for at most the grace period, makes sure the timer fires on time. Unlocking the phone restores the app you were in.
+
+## Recent activity log
+
+The home screen lists the latest allow/block decisions with timestamps (for example "WhatsApp · Left the app: blocked in 30 s"), so you can check While open behaviour without a computer. The log is kept in memory only and cleared when the app restarts.
 
 ## Permissions and why each is needed
 

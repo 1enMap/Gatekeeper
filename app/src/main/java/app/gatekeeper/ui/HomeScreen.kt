@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -16,6 +17,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -23,6 +25,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.R
 import app.gatekeeper.data.Mode
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HomeScreen(
@@ -36,6 +41,7 @@ fun HomeScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val accessibilityRunning by viewModel.accessibilityRunning.collectAsStateWithLifecycle()
     val rows by viewModel.allRows.collectAsStateWithLifecycle()
+    val activity by viewModel.activity.collectAsStateWithLifecycle()
 
     val blockedRules = rows?.count { it.mode == Mode.BLOCKED } ?: 0
     val whileOpenRules = rows?.count { it.mode == Mode.WHILE_OPEN } ?: 0
@@ -123,6 +129,33 @@ fun HomeScreen(
             }
             OutlinedButton(onClick = { navigate(Screen.Onboarding) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Setup guide")
+            }
+
+            SectionCard {
+                Text("Recent activity", style = MaterialTheme.typography.titleMedium)
+                if (activity.isEmpty()) {
+                    Text(
+                        "Nothing yet. Opening and leaving \"While open\" apps will show up here.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                val labels = rows?.associate { it.app.packageName to it.app.label }.orEmpty()
+                val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+                activity.forEach { entry ->
+                    val who = entry.packageName?.let { labels[it] ?: it }
+                    Row {
+                        Text(
+                            timeFormat.format(Date(entry.timeMillis)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(64.dp),
+                        )
+                        Text(
+                            if (who != null) "$who · ${entry.message}" else entry.message,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
         }
     }

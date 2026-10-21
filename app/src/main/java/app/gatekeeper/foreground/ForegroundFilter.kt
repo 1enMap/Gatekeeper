@@ -5,9 +5,12 @@ import android.os.SystemClock
 import android.view.inputmethod.InputMethodManager
 
 /**
- * Decides which packages never count as "the app on screen": system UI, keyboards,
- * Gatekeeper itself. Without this, opening the keyboard inside WhatsApp would look like
- * leaving WhatsApp.
+ * Decides which packages never count as "the app on screen": system UI and keyboards.
+ * Without this, opening the keyboard inside WhatsApp would look like leaving WhatsApp.
+ *
+ * Gatekeeper itself is deliberately NOT ignored: switching from a "While open" app to
+ * Gatekeeper must count as leaving that app. Gatekeeper never blocks itself, so treating it
+ * as a normal foreground app is harmless.
  */
 class ForegroundFilter(private val context: Context) {
     private val inputMethodManager = context.getSystemService(InputMethodManager::class.java)
@@ -15,7 +18,7 @@ class ForegroundFilter(private val context: Context) {
     private var keyboardsLoadedAt = 0L
 
     fun isIgnored(pkg: String): Boolean {
-        if (pkg in ALWAYS_IGNORED || pkg == context.packageName) return true
+        if (pkg in ALWAYS_IGNORED) return true
         return pkg in currentKeyboards()
     }
 

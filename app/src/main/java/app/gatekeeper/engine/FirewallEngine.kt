@@ -72,6 +72,18 @@ class FirewallEngine(
 
     private val reblockTimers = HashMap<String, Job>()
 
+    private val _activity = MutableStateFlow<List<ActivityEntry>>(emptyList())
+
+    /** Recent allow/block decisions, newest first, kept in memory only. */
+    val activity: StateFlow<List<ActivityEntry>> = _activity.asStateFlow()
+
+    /** Adds a line to the in-app activity log (also safe to call from other threads). */
+    fun log(packageName: String?, message: String) {
+        Log.d(TAG, "${packageName ?: "-"}: $message")
+        val entry = ActivityEntry(System.currentTimeMillis(), packageName, message)
+        _activity.update { (listOf(entry) + it).take(MAX_ACTIVITY) }
+    }
+
     init {
         // A WHILE_OPEN app may already be on screen before Room has delivered the rules.
         scope.launch {
@@ -90,7 +102,8 @@ class FirewallEngine(
         if (previous != null && previous != pkg) startGraceTimer(previous, screenOff = false)
 
         if (modeOf(pkg) == Mode.WHILE_OPEN) {
-            reblockTimers.remove(pkg)?.cancel()
+            val wasPending = reblockTimers.remove(pkg)?.cancel() != null
+            if (pkg !in temporarilyAllowed.value || wasPending) log(pkg, "On screen: internet allowed")
             temporarilyAllowed.update { it + pkg }
         }
     }
@@ -127,10 +140,13 @@ class FirewallEngine(
         if (pkg !in temporarilyAllowed.value) return
         reblockTimers.remove(pkg)?.cancel()
         val graceSeconds = rulesState.value?.get(pkg)?.graceSeconds ?: AppRule.DEFAULT_GRACE_SECONDS
+        val why = if (screenOff) "Screen off" else "Left the app"
         if (graceSeconds <= 0) {
+            log(pkg, "$why: blocked")
             temporarilyAllowed.update { it - pkg }
             return
         }
+        log(pkg, "$why: blocked in $graceSeconds s")
         // With the screen off the CPU may sleep and delay the timer; hold a bounded wake lock
         // so the app really loses internet when its grace period ends.
         val wakeLock = if (screenOff) {
@@ -144,7 +160,7 @@ class FirewallEngine(
         reblockTimers[pkg] = scope.launch {
             try {
                 delay(graceSeconds * 1000L)
-                Log.d(TAG, "Grace period over, re-blocking $pkg")
+                log(pkg, "Grace period over: blocked")
                 temporarilyAllowed.update { it - pkg }
                 reblockTimers.remove(pkg)
             } finally {
@@ -159,5 +175,8 @@ class FirewallEngine(
 
     private companion object {
         const val TAG = "FirewallEngine"
+        const val MAX_ACTIVITY = 50
     }
 }
+
+data class ActivityEntry(val timeMillis: Long, val packageName: String?, val message: String)

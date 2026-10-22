@@ -48,13 +48,18 @@ object Notifications {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    fun status(context: Context, blockedCount: Int, monitoring: Boolean = false): Notification {
+    /** [tor]: Tor mode status line, shown instead of the usual one while Tor mode is on. */
+    fun status(context: Context, blockedCount: Int, monitoring: Boolean = false, tor: String? = null): Notification {
         val blocked = when (blockedCount) {
             0 -> "no apps blocked right now"
             1 -> "1 app blocked"
             else -> "$blockedCount apps blocked"
         }
-        val text = if (monitoring) "Live monitor on · $blocked" else "Gatekeeper active · $blocked"
+        val text = when {
+            tor != null -> "$tor · $blocked"
+            monitoring -> "Live monitor on · $blocked"
+            else -> "Gatekeeper active · $blocked"
+        }
         return NotificationCompat.Builder(context, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_shield)
             .setContentTitle(text)

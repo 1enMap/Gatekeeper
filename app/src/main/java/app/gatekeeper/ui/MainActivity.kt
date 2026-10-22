@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
                     val screen = backStack.last()
                     stateHolder.SaveableStateProvider(screen.toString()) {
                         when (screen) {
-                            Screen.Home -> HomeScreen(viewModel, insights, navigate, onToggleFirewall = ::toggleFirewall)
+                            Screen.Home -> HomeScreen(viewModel, insights, navigate, onToggleFirewall = ::toggleFirewall, onToggleTor = ::toggleTor)
                             Screen.Apps -> AppListScreen(
                                 viewModel,
                                 onBack = back,
@@ -130,6 +130,12 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleFirewall(on: Boolean) {
         if (!on) viewModel.setFirewall(false) else requestEnable()
+    }
+
+    private fun toggleTor(on: Boolean) {
+        viewModel.setTorMode(on)
+        // Tor mode lives inside the firewall's VPN, so turning it on starts the firewall too.
+        if (on && !GatekeeperVpnService.status.value.running) requestEnable()
     }
 
     private fun startMonitor() {

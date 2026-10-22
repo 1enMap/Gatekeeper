@@ -88,6 +88,9 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.kotlinx.coroutines.android)
+    // Tor mode (experimental): Tor itself, run inside Gatekeeper as a client only.
+    implementation(libs.tor.android)
+    implementation(libs.jtorctl)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
 }

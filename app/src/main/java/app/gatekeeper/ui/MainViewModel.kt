@@ -18,6 +18,7 @@ import app.gatekeeper.engine.ActivityEntry
 import app.gatekeeper.foreground.ForegroundAccessibilityService
 import app.gatekeeper.foreground.UsageStatsPoller
 import app.gatekeeper.gatekeeper
+import app.gatekeeper.tor.TorState
 import app.gatekeeper.vpn.GatekeeperVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -61,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val settings: StateFlow<SettingsState?> = app.settings.state
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val vpnStatus: StateFlow<GatekeeperVpnService.Status> = GatekeeperVpnService.status
+    val torState: StateFlow<TorState> = app.tor.state
     val accessibilityRunning: StateFlow<Boolean> = ForegroundAccessibilityService.running
     val activity: StateFlow<List<ActivityEntry>> = app.engine.activity
 
@@ -162,6 +164,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDefaultGrace(seconds: Int) = viewModelScope.launch { app.settings.setDefaultGrace(seconds) }
     fun setUsageFallback(enabled: Boolean) = viewModelScope.launch { app.settings.setUsageStatsFallback(enabled) }
     fun setOnboardingDone(done: Boolean) = viewModelScope.launch { app.settings.setOnboardingDone(done) }
+    fun setTorMode(enabled: Boolean) = viewModelScope.launch { app.settings.setTorMode(enabled) }
+    fun newTorIdentity() = app.tor.newIdentity()
+
+    /** After a failure: start Tor again (only while the firewall runs it). */
+    fun retryTor() {
+        if (!GatekeeperVpnService.status.value.running) return
+        app.tor.stop()
+        app.tor.start()
+    }
 
     private fun modeOrder(mode: Mode) = when (mode) {
         Mode.BLOCKED -> 0

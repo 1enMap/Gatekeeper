@@ -8,6 +8,7 @@ import app.gatekeeper.data.RuleRepository
 import app.gatekeeper.data.Settings
 import app.gatekeeper.engine.FirewallEngine
 import app.gatekeeper.foreground.ForegroundFilter
+import app.gatekeeper.tor.TorController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +29,9 @@ class GatekeeperApp : Application() {
         private set
     lateinit var foregroundFilter: ForegroundFilter
         private set
+
+    /** Embedded Tor for Tor mode; started and stopped by the VPN service. */
+    val tor: TorController by lazy { TorController(this) }
 
     override fun onCreate() {
         super.onCreate()

@@ -12,7 +12,7 @@ For example, with WhatsApp set to **While open**, no messages arrive in the back
 
 Gatekeeper never contacts any server of its own: no analytics, no crash reporting, no update checks and no third-party SDKs. Rules and logs are stored on the device and excluded from cloud backup and device transfer.
 
-It holds the `INTERNET` permission for exactly one feature, the **Live monitor**. You start the monitor by hand, and while it runs Gatekeeper relays other apps' traffic so you can see where it goes. In normal mode Gatekeeper relays nothing: it only drops the packets of blocked apps.
+It holds the `INTERNET` permission for two features you turn on by hand: the **Live monitor**, which relays other apps' traffic so you can see where it goes, and the experimental **Tor mode**, which relays it through Tor. In normal mode Gatekeeper relays nothing: it only drops the packets of blocked apps.
 
 ## Building
 
@@ -105,6 +105,29 @@ The forwarder has JVM tests in `app/src/test/java/app/gatekeeper/monitor/` that 
 - SNI extraction.
 
 Every packet the engine produces is checksum-verified.
+
+## Tor mode (experimental)
+
+Turn on **Tor mode** on the home screen and every app's traffic goes through the [Tor network](https://www.torproject.org/). Tor runs inside Gatekeeper (Guardian Project's [tor-android](https://github.com/guardianproject/tor-android), the same Tor that Orbot uses), as a **client only**: your phone never relays anyone else's traffic.
+
+**How it works:** Tor mode uses the live monitor's tunnel (every app except Gatekeeper is routed in) with one change in `monitor/ForwardingEngine.kt`: instead of opening a direct socket for each connection, the engine opens it through Tor's local SOCKS port. The app's SYN-ACK is sent only after Tor has opened the stream, so a failed circuit looks to the app like a refused connection.
+
+- **Per-app circuits.** The SOCKS username is the app's package name. Tor keeps streams with different usernames on different circuits (`IsolateSOCKSAuth`), so traffic from two apps can't easily be linked by a single exit.
+- **New identity** bumps a counter in the SOCKS password and sends `NEWNYM`: open connections are reset and every app reconnects on fresh circuits.
+- **DNS** (UDP 53, to any server) is answered by Tor's resolver (`DNSPort`), so lookups don't leak. `.onion` names resolve to placeholder addresses that Tor maps back.
+- **Other UDP is dropped**, because Tor carries only TCP. QUIC falls back to TCP. Dropped flows show as blocked in the live view.
+- **Fails closed.** Until Tor reports 100 % bootstrapped, new connections are refused and DNS gets no answer. Nothing is ever relayed directly. If Tor fails, apps stay offline until you retry or turn Tor mode off.
+- **Blocked apps stay blocked**, and the live monitor view works while Tor mode is on.
+
+**Limits (shown in the app too):**
+- Tor hides your IP address, not your identity: log into an account and that site knows it's you.
+- It's slow, and some sites block or CAPTCHA Tor exits.
+- Voice/video calls, games and other UDP-only apps don't work. Devices on your local network (printers, casting) can't be reached.
+- Your mobile network or Wi-Fi can see that you use Tor (not what for). Bridges aren't supported yet.
+- During boot, before Gatekeeper's VPN is up, apps can go online directly. To close that gap, set Gatekeeper as **Always-on VPN** with **Block connections without VPN**. That's safe only with Tor mode on: in normal mode it cuts off every app Gatekeeper doesn't block.
+- Not audited. Don't rely on it where your safety depends on anonymity; use Tor Browser or Tails for that.
+
+Tor adds roughly 10–15 MB per CPU architecture to the APK.
 
 ## Recent activity log
 

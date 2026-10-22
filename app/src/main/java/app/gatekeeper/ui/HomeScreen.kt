@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -27,6 +28,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.R
 import app.gatekeeper.data.Mode
 import app.gatekeeper.insights.Risk
+import app.gatekeeper.tor.TorState
+import app.gatekeeper.vpn.GatekeeperVpnService
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -37,6 +40,7 @@ fun HomeScreen(
     insights: InsightsViewModel,
     navigate: (Screen) -> Unit,
     onToggleFirewall: (Boolean) -> Unit,
+    onToggleTor: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val status by viewModel.vpnStatus.collectAsStateWithLifecycle()
@@ -114,7 +118,7 @@ fun HomeScreen(
                         text = if (status.alwaysOn) "Always-on VPN enabled" else "Always-on VPN not enabled (recommended)",
                     )
                 }
-                if (status.lockdown) {
+                if (status.lockdown && settings?.torMode != true) {
                     StatusLine(
                         ok = false,
                         text = "\"Block connections without VPN\" is on. This cuts off every app Gatekeeper " +
@@ -132,8 +136,16 @@ fun HomeScreen(
             }
 
             OutlinedButton(onClick = { navigate(Screen.Live(null)) }, modifier = Modifier.fillMaxWidth()) {
-                Text(if (status.monitoring) "● Live monitor is on: view" else "Live monitor: see where apps connect")
+                Text(
+                    when {
+                        status.torMode -> "● Live view of traffic through Tor"
+                        status.monitoring -> "● Live monitor is on: view"
+                        else -> "Live monitor: see where apps connect"
+                    },
+                )
             }
+
+            TorCard(viewModel, status, torModeOn = settings?.torMode == true, onToggleTor = onToggleTor)
 
             PrivacyCheckupCard(insights, navigate)
             OutlinedButton(onClick = { navigate(Screen.Onboarding) }, modifier = Modifier.fillMaxWidth()) {
@@ -215,6 +227,89 @@ private fun PrivacyCheckupCard(insights: InsightsViewModel, navigate: (Screen) -
             }
             OutlinedButton(onClick = { navigate(Screen.Connections) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
                 Text("Log", maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TorCard(
+    viewModel: MainViewModel,
+    status: GatekeeperVpnService.Status,
+    torModeOn: Boolean,
+    onToggleTor: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val tor by viewModel.torState.collectAsStateWithLifecycle()
+
+    SectionCard(
+        container = if (torModeOn && tor is TorState.Ready) MaterialTheme.colorScheme.tertiaryContainer
+        else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Tor mode", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Experimental",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Switch(checked = torModeOn, onCheckedChange = onToggleTor)
+        }
+
+        when {
+            !torModeOn -> Text(
+                "Sends every app's traffic through the Tor network, each app on its own circuit. " +
+                    "Sites and your mobile network can no longer link what you do to your IP address.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            !status.running -> StatusLine(ok = false, warn = true, text = "Starts when the firewall is on")
+            else -> when (val t = tor) {
+                is TorState.Ready -> {
+                    StatusLine(ok = true, text = "Connected. All apps go through Tor.")
+                    OutlinedButton(onClick = { viewModel.newTorIdentity() }, modifier = Modifier.fillMaxWidth()) {
+                        Text("New identity (fresh circuits)")
+                    }
+                }
+                is TorState.Starting -> {
+                    StatusLine(
+                        ok = false, warn = true,
+                        text = "Connecting to Tor… ${t.progress}%" + if (t.summary.isNotBlank()) " · ${t.summary}" else "",
+                    )
+                    LinearProgressIndicator(progress = { t.progress / 100f }, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "Apps are offline until Tor connects. Nothing goes out without Tor.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                is TorState.Failed -> {
+                    StatusLine(ok = false, text = t.message)
+                    Text(
+                        "Apps stay offline rather than leak. Retry, or turn Tor mode off to go back to normal.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedButton(onClick = { viewModel.retryTor() }) { Text("Retry") }
+                }
+                TorState.Off -> StatusLine(ok = false, warn = true, text = "Starting Tor…")
+            }
+        }
+
+        if (torModeOn) {
+            Text(
+                "Know the limits: Tor hides your IP, not your identity. If you log in, the site knows " +
+                    "it's you. It's slower, some sites block Tor, and voice/video calls, games and other " +
+                    "UDP apps won't work. Devices on your Wi-Fi (printers, casting) can't be reached.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (status.running && !(status.alwaysOn && status.lockdown)) {
+                Text(
+                    "For no leaks while the phone boots or Gatekeeper restarts, turn on \"Always-on VPN\" " +
+                        "and \"Block connections without VPN\" for Gatekeeper. (Only with Tor mode on: " +
+                        "in normal mode that setting cuts off every app.)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(onClick = { SystemIntents.openVpnSettings(context) }) { Text("Open VPN settings") }
             }
         }
     }

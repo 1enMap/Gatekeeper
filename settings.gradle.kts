@@ -10,6 +10,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Guardian Project's repository, for tor-android and jtorctl only (Tor mode).
+        maven {
+            url = uri("https://raw.githubusercontent.com/guardianproject/gpmaven/master")
+            content { includeGroup("info.guardianproject") }
+        }
     }
 }
 

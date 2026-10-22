@@ -1,6 +1,8 @@
 package app.gatekeeper.monitor
 
 import app.gatekeeper.data.ConnectionAttempt
+import app.gatekeeper.tor.TorRoute
+import java.io.DataInputStream
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
@@ -12,6 +14,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -45,7 +48,7 @@ class ForwardingEngineTest {
         }
     }
 
-    private fun start(blocked: Set<String> = emptySet()): ForwardingEngine {
+    private fun start(blocked: Set<String> = emptySet(), torMode: Boolean = false, route: TorRoute? = null): ForwardingEngine {
         val e = ForwardingEngine(
             protector = object : ForwardingEngine.Protector {
                 override fun protect(socket: Socket) = true
@@ -59,6 +62,8 @@ class ForwardingEngineTest {
             initialBlocked = blocked,
             onBlockedPacket = { _, _ -> blockedPackets.incrementAndGet() },
             finished = ConcurrentLinkedQueue<ConnectionAttempt>(),
+            torMode = torMode,
+            initialTorRoute = route,
             clock = { System.nanoTime() / 1_000_000 },
         )
         e.start()
@@ -354,5 +359,126 @@ class ForwardingEngineTest {
         }.toByteArray()
         val handshake = byteArrayOf(1, 0, (body.size shr 8).toByte(), body.size.toByte()) + body
         return byteArrayOf(22, 3, 1, (handshake.size shr 8).toByte(), handshake.size.toByte()) + handshake
+    }
+
+    // ---- Tor mode ----
+
+    /** What the fake Tor saw on one SOCKS connection. */
+    private class SocksSeen(val username: String, val password: String, val address: ByteArray, val port: Int)
+
+    /**
+     * A stand-in for Tor's SOCKS port: checks the handshake, records it, then answers like the
+     * remote server would. [replyCode] != 0 refuses the CONNECT. The success reply is sent in the
+     * same write as a server banner, to check the engine doesn't swallow data after the reply.
+     */
+    private fun fakeTor(seen: AtomicReference<SocksSeen>, replyCode: Int = 0): ServerSocket {
+        val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        thread(isDaemon = true) {
+            server.accept().use { s ->
+                val input = DataInputStream(s.getInputStream())
+                val out = s.getOutputStream()
+                val greeting = ByteArray(3).also { input.readFully(it) }
+                assertArrayEquals(byteArrayOf(5, 1, 2), greeting)
+                out.write(byteArrayOf(5, 2))
+                assertEquals(1, input.readUnsignedByte())
+                val user = ByteArray(input.readUnsignedByte()).also { input.readFully(it) }
+                val pass = ByteArray(input.readUnsignedByte()).also { input.readFully(it) }
+                out.write(byteArrayOf(1, 0))
+                val head = ByteArray(4).also { input.readFully(it) }
+                assertEquals(5, head[0].toInt())
+                assertEquals(1, head[1].toInt())
+                val address = ByteArray(if (head[3].toInt() == 4) 16 else 4).also { input.readFully(it) }
+                val port = input.readUnsignedShort()
+                seen.set(SocksSeen(String(user), String(pass), address, port))
+                if (replyCode != 0) {
+                    out.write(byteArrayOf(5, replyCode.toByte(), 0, 1, 0, 0, 0, 0, 0, 0))
+                    return@use
+                }
+                out.write(byteArrayOf(5, 0, 0, 1, 0, 0, 0, 0, 0, 0) + "BANNER ".toByteArray())
+                val buf = ByteArray(4096)
+                val n = input.read(buf)
+                out.write("via-tor:".toByteArray() + buf.copyOf(maxOf(n, 0)))
+                s.shutdownOutput()
+                input.read() // Wait for the client's FIN.
+            }
+        }
+        return server
+    }
+
+    private val remote4 = byteArrayOf(203.toByte(), 0, 113, 7) // TEST-NET-3: never reached directly.
+
+    @Test
+    fun torModeRelaysThroughSocksWithAppAsUsername() {
+        val seen = AtomicReference<SocksSeen>()
+        val tor = fakeTor(seen)
+        val e = start(torMode = true, route = TorRoute(socksPort = tor.localPort, dnsPort = 1, epoch = 3))
+        val reply = exchange(e, app4, remote4, 443, "hello".toByteArray(), 41000)
+        assertEquals("BANNER via-tor:hello", String(reply))
+        val s = seen.get()
+        assertNotNull(s)
+        assertEquals("com.test.app", s.username) // One app, one set of circuits.
+        assertEquals("gatekeeper-3", s.password) // The identity epoch.
+        assertArrayEquals(remote4, s.address)
+        assertEquals(443, s.port)
+    }
+
+    @Test
+    fun torModeRefusesConnectionsUntilTorIsReady() {
+        val e = start(torMode = true, route = null)
+        send(e, tcp(app4, remote4, 41001, 443, 1, 0, IpPacket.SYN, mss = 1460))
+        val p = next()
+        assertTrue("RST, never a direct connection", p.isRst)
+        assertEquals(2L, p.ack)
+    }
+
+    @Test
+    fun torModeFailedCircuitResetsTheApp() {
+        val seen = AtomicReference<SocksSeen>()
+        val tor = fakeTor(seen, replyCode = 4) // Host unreachable.
+        val e = start(torMode = true, route = TorRoute(tor.localPort, 1))
+        send(e, tcp(app4, remote4, 41002, 80, 1, 0, IpPacket.SYN, mss = 1460))
+        val p = next(5000)
+        assertTrue("RST instead of SYN-ACK", p.isRst && !p.isSyn)
+        assertEquals(2L, p.ack)
+    }
+
+    @Test
+    fun torModeDropsNonDnsUdp() {
+        val target = DatagramSocket(0, InetAddress.getByName("127.0.0.1")).apply { soTimeout = 500 }
+        val e = start(torMode = true, route = TorRoute(1, 1))
+        val data = "voice".toByteArray()
+        send(e, IpPacket.udp(false, app4, loop4, 5556, target.localPort, data, 0, data.size))
+        assertNull(fromEngine.poll(500, TimeUnit.MILLISECONDS))
+        val got = runCatching { target.receive(DatagramPacket(ByteArray(100), 100)) }
+        assertTrue("UDP must not leave around Tor", got.isFailure)
+    }
+
+    @Test
+    fun torModeSendsDnsToTorResolver() {
+        val resolver = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        thread(isDaemon = true) {
+            val buf = ByteArray(1500)
+            val p = DatagramPacket(buf, buf.size)
+            resolver.receive(p)
+            resolver.send(DatagramPacket("answer".toByteArray(), 6, p.socketAddress))
+        }
+        val tunnelDns = byteArrayOf(10, 111, 222.toByte(), 2)
+        val e = start(torMode = true, route = TorRoute(1, resolver.localPort))
+        val query = "query".toByteArray()
+        send(e, IpPacket.udp(false, app4, tunnelDns, 5557, 53, query, 0, query.size))
+        val reply = next()
+        assertEquals(IpPacket.UDP, reply.protocol)
+        assertArrayEquals("reply appears to come from the server the app asked", tunnelDns, reply.src)
+        assertEquals(53, reply.srcPort)
+        assertEquals(5557, reply.dstPort)
+        assertEquals("answer", String(reply.buf, reply.payloadOffset, reply.payloadLength))
+    }
+
+    @Test
+    fun torModeStillDropsBlockedApps() {
+        val e = start(blocked = setOf("com.test.app"), torMode = true, route = TorRoute(1, 1))
+        send(e, tcp(app4, remote4, 41003, 443, 1, 0, IpPacket.SYN, mss = 1460))
+        assertNull(fromEngine.poll(500, TimeUnit.MILLISECONDS))
+        assertEquals(1, blockedPackets.get())
     }
 }

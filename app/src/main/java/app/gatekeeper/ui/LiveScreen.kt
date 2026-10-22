@@ -83,6 +83,7 @@ fun LiveScreen(
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     when {
+                                        status.torMode -> "● Watching traffic going through Tor"
                                         status.monitoring -> "● Watching all traffic"
                                         requested -> "Starting…"
                                         else -> "Monitor is off"
@@ -91,7 +92,9 @@ fun LiveScreen(
                                     color = if (status.monitoring) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
                                 )
                             }
-                            if (status.monitoring || requested) {
+                            if (status.torMode) {
+                                // Tor mode already relays everything; it is turned off on the home screen.
+                            } else if (status.monitoring || requested) {
                                 Button(
                                     onClick = onStop,
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -107,6 +110,13 @@ fun LiveScreen(
                                 "more battery: stop it when you're done (it also stops on restart).",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                        if (status.torMode) {
+                            Text(
+                                "Tor mode is on, so this view is live while it runs. Addresses are the ones apps " +
+                                    "asked for; sites see a Tor exit instead of your IP. Dropped UDP shows as blocked.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

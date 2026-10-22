@@ -4,6 +4,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import app.gatekeeper.data.ConnectionAttempt
+import app.gatekeeper.tor.TorRoute
 import java.io.IOException
 import java.io.OutputStream
 import java.net.DatagramSocket
@@ -25,6 +26,12 @@ import kotlin.random.Random
  * for TCP the engine completes the handshake itself and relays the byte stream over a real
  * (protected) socket, for UDP it relays datagrams. Blocked apps' packets are still dropped.
  *
+ * Tor mode ([torMode]): TCP connections are opened through Tor's SOCKS port instead of directly,
+ * with the owning app as the SOCKS username so each app gets its own circuits. DNS (UDP 53, to
+ * any server) goes to Tor's DNS port; every other UDP datagram is dropped, because Tor carries
+ * only TCP. Nothing ever leaves directly: until Tor is ready ([updateTorRoute] with a route),
+ * new connections are refused, so the mode fails closed.
+ *
  * Single-threaded: all flow state is touched only on this thread. The tunnel reader hands packets
  * over through [enqueue].
  */
@@ -40,6 +47,10 @@ class ForwardingEngine(
     private val onBlockedPacket: (ByteArray, Int) -> Unit,
     /** Finished connections waiting to be written to the connection log. */
     private val finished: ConcurrentLinkedQueue<ConnectionAttempt>,
+    /** Relay through Tor instead of directly. Fixed for the engine's lifetime. */
+    private val torMode: Boolean = false,
+    /** Tor's ports, or null while Tor is not ready (Tor mode only). */
+    initialTorRoute: TorRoute? = null,
     /** Monotonic milliseconds. */
     private val clock: () -> Long = { SystemClock.elapsedRealtime() },
 ) : Thread("monitor-engine") {
@@ -57,6 +68,8 @@ class ForwardingEngine(
     private val inbox = ConcurrentLinkedQueue<ByteArray>()
     private val pendingBlocked = AtomicReference<Set<String>?>(null)
     private var blocked: Set<String> = initialBlocked
+    private val pendingRoute = AtomicReference<RouteUpdate?>(null)
+    private var route: TorRoute? = initialTorRoute
 
     @Volatile private var running = true
 
@@ -64,7 +77,7 @@ class ForwardingEngine(
     private val udpFlows = HashMap<String, UdpFlow>()
     /** Flows whose owner is blocked: key → package, so retries skip the owner lookup. */
     private val blockedFlows = Lru<String, String>(1024)
-    /** QUIC flows already recorded; their packets are dropped silently. */
+    /** QUIC flows (and, in Tor mode, any non-DNS UDP flow) already recorded; dropped silently. */
     private val quicFlows = Lru<String, Boolean>(1024)
     /** Address → name, learned from DNS answers relayed for apps. */
     private val dnsNames = Lru<String, String>(4096)
@@ -94,6 +107,14 @@ class ForwardingEngine(
         selector.wakeup()
     }
 
+    /** New Tor ports or identity (Tor mode). Open connections are reset so apps reconnect. */
+    fun updateTorRoute(route: TorRoute?) {
+        pendingRoute.set(RouteUpdate(route))
+        selector.wakeup()
+    }
+
+    private class RouteUpdate(val route: TorRoute?)
+
     fun shutdown() {
         running = false
         selector.wakeup()
@@ -110,6 +131,7 @@ class ForwardingEngine(
             while (running) {
                 selector.select(TICK_MS)
                 pendingBlocked.getAndSet(null)?.let { applyBlocked(it) }
+                pendingRoute.getAndSet(null)?.let { applyRoute(it.route) }
 
                 val keys = selector.selectedKeys().iterator()
                 while (keys.hasNext()) {
@@ -189,12 +211,18 @@ class ForwardingEngine(
             return
         }
         val (owner, isBlocked) = ownerOf(p, key)
-        val record = newRecord(owner, "TCP", p.dst, p.dstPort, blocked = isBlocked)
         if (isBlocked) {
+            newRecord(owner, "TCP", p.dst, p.dstPort, blocked = true)
             onBlockedPacket(raw, raw.size)
             return
         }
-        val flow = TcpFlow(key, p, owner, record)
+        if (torMode && route == null) {
+            // Tor isn't ready: refuse rather than ever connecting directly.
+            sendRst(p)
+            return
+        }
+        val record = newRecord(owner, "TCP", p.dst, p.dstPort, blocked = false)
+        val flow = TcpFlow(key, p, owner, record, if (torMode) route else null)
         try {
             flow.start()
             tcpFlows[key] = flow
@@ -211,7 +239,14 @@ class ForwardingEngine(
         write(IpPacket.tcp(p.v6, p.dst, p.src, p.dstPort, p.srcPort, seq, ack, IpPacket.RST or IpPacket.ACK, 0))
     }
 
-    private inner class TcpFlow(val key: String, syn: IpPacket, val owner: String?, val record: Record) {
+    private inner class TcpFlow(
+        val key: String,
+        syn: IpPacket,
+        val owner: String?,
+        val record: Record,
+        /** Non-null: connect through Tor's SOCKS port with this identity. */
+        private val tor: TorRoute?,
+    ) {
         private val v6 = syn.v6
         private val app = syn.src
         private val appPort = syn.srcPort
@@ -247,12 +282,81 @@ class ForwardingEngine(
 
         private var sniff: ByteQueue? = ByteQueue(SNIFF_LIMIT)
 
+        /** SOCKS handshake progress (Tor only); [SOCKS_DONE] once the stream is open. */
+        private var socksStage = SOCKS_DONE
+        private var socksNeed = 0
+        private val socksBuf: ByteBuffer? = if (tor != null) ByteBuffer.allocate(SOCKS_REPLY_MAX) else null
+
         fun start() {
             channel.configureBlocking(false)
             protector.protect(channel.socket())
-            val done = channel.connect(InetSocketAddress(InetAddress.getByAddress(remote), remotePort))
+            val target = if (tor != null) InetSocketAddress(LOOPBACK, tor.socksPort)
+            else InetSocketAddress(InetAddress.getByAddress(remote), remotePort)
+            val done = channel.connect(target)
             selectionKey = channel.register(selector, if (done) 0 else SelectionKey.OP_CONNECT, this)
-            if (done) onConnected()
+            if (done) onSocketConnected()
+        }
+
+        private fun onSocketConnected() {
+            if (tor == null) onConnected() else beginSocks()
+        }
+
+        // ---- SOCKS5 to Tor. The app's SYN-ACK is sent only once Tor has opened the stream, so a
+        // failure (unreachable host, circuit timeout) reaches the app as a refused connection.
+
+        private fun beginSocks() {
+            writeFully(Socks5.greeting())
+            expectSocks(SOCKS_METHOD, 2)
+        }
+
+        private fun expectSocks(stage: Int, bytes: Int) {
+            socksStage = stage
+            socksNeed = bytes
+            socksBuf!!.clear()
+            updateInterest()
+        }
+
+        private fun readSocks() {
+            val buf = socksBuf!!
+            while (true) {
+                buf.limit(socksNeed) // Never read past the reply: what follows is the server's data.
+                if (channel.read(buf) < 0) throw IOException("Tor closed the connection")
+                if (buf.position() < socksNeed) return
+                val got = buf.array().copyOf(socksNeed)
+                when (socksStage) {
+                    SOCKS_METHOD -> {
+                        if (!Socks5.methodAccepted(got)) throw IOException("Tor refused SOCKS auth")
+                        // Username = app: Tor gives every app its own circuits (IsolateSOCKSAuth).
+                        writeFully(Socks5.auth(owner ?: "system", "gatekeeper-${tor!!.epoch}"))
+                        expectSocks(SOCKS_AUTH, 2)
+                    }
+                    SOCKS_AUTH -> {
+                        if (!Socks5.authAccepted(got)) throw IOException("Tor refused SOCKS login")
+                        writeFully(Socks5.connect(remote, remotePort))
+                        expectSocks(SOCKS_REPLY_HEAD, 5)
+                    }
+                    SOCKS_REPLY_HEAD -> {
+                        val code = Socks5.replyCode(got)
+                        if (code != 0) throw IOException("Tor: ${Socks5.describe(code)}")
+                        val total = Socks5.replyLength(got)
+                        if (total < 5) throw IOException("Tor: bad SOCKS reply")
+                        socksStage = SOCKS_REPLY_REST
+                        socksNeed = total // Keep the 5 bytes already read.
+                    }
+                    SOCKS_REPLY_REST -> {
+                        socksStage = SOCKS_DONE
+                        onConnected()
+                        return
+                    }
+                }
+            }
+        }
+
+        private fun writeFully(bytes: ByteArray) {
+            val buf = ByteBuffer.wrap(bytes)
+            // A few bytes on a fresh loopback socket; a short write means something is badly wrong.
+            repeat(3) { if (buf.hasRemaining()) channel.write(buf) }
+            if (buf.hasRemaining()) throw IOException("SOCKS write stalled")
         }
 
         /** Start failed before the flow was registered. */
@@ -279,12 +383,17 @@ class ForwardingEngine(
             try {
                 if (!key.isValid) return
                 if (key.isConnectable) {
-                    if (channel.finishConnect()) onConnected()
+                    if (channel.finishConnect()) onSocketConnected()
+                    return
+                }
+                if (socksStage != SOCKS_DONE) {
+                    if (key.isReadable) readSocks()
                     return
                 }
                 if (key.isWritable) flushToRemote()
                 if (key.isValid && key.isReadable) readFromRemote()
             } catch (e: IOException) {
+                if (tor != null && !connected) Log.d(TAG, "Tor connect to ${addr(remote)}:$remotePort failed: ${e.message}")
                 close(reset = true)
             }
         }
@@ -450,7 +559,7 @@ class ForwardingEngine(
 
         fun tick(now: Long) {
             if (!connected) {
-                if (now - created > CONNECT_TIMEOUT_MS) close(reset = true)
+                if (now - created > if (tor != null) TOR_CONNECT_TIMEOUT_MS else CONNECT_TIMEOUT_MS) close(reset = true)
                 return
             }
             if (!synAcked) {
@@ -485,7 +594,7 @@ class ForwardingEngine(
         private fun updateInterest() {
             if (!selectionKey.isValid) return
             var ops = 0
-            if (!connected) ops = SelectionKey.OP_CONNECT
+            if (!connected) ops = if (socksStage != SOCKS_DONE) SelectionKey.OP_READ else SelectionKey.OP_CONNECT
             else {
                 if (toRemote.isNotEmpty()) ops = ops or SelectionKey.OP_WRITE
                 if (synAcked && !remoteEof && unacked.size < minOf(appWindow, WINDOW)) ops = ops or SelectionKey.OP_READ
@@ -527,6 +636,27 @@ class ForwardingEngine(
             onBlockedPacket(raw, raw.size)
             return
         }
+        if (torMode) {
+            val tor = route
+            if (p.dstPort != 53) {
+                // Tor carries only TCP. Dropping UDP keeps it from leaking around Tor; QUIC and
+                // most other UDP users fall back to TCP. Recorded once per flow, as dropped.
+                quicFlows.put(key, true)
+                newRecord(owner, if (p.dstPort == 443) "QUIC" else "UDP", p.dst, p.dstPort, blocked = true)
+                    .host = dnsNames.get(addr(p.dst))
+                return
+            }
+            if (tor == null) return // Not ready: no answer, the app retries.
+            try {
+                // Any DNS server the app asks is answered by Tor's resolver.
+                val flow = UdpFlow(key, p, owner, newRecord(owner, "DNS", p.dst, p.dstPort, blocked = false), InetSocketAddress(LOOPBACK, tor.dnsPort))
+                udpFlows[key] = flow
+                flow.send(p)
+            } catch (e: IOException) {
+                Log.d(TAG, "Tor DNS open failed: ${e.message}")
+            }
+            return
+        }
         if (p.dstPort == 443) {
             // QUIC hides the server name; dropping it makes apps fall back to TCP, where the
             // name is visible. Recorded once per flow.
@@ -538,7 +668,11 @@ class ForwardingEngine(
             return
         }
         try {
-            val flow = UdpFlow(key, p, owner, newRecord(owner, if (p.dstPort == 53) "DNS" else "UDP", p.dst, p.dstPort, blocked = false))
+            val flow = UdpFlow(
+                key, p, owner,
+                newRecord(owner, if (p.dstPort == 53) "DNS" else "UDP", p.dst, p.dstPort, blocked = false),
+                InetSocketAddress(InetAddress.getByAddress(p.dst), p.dstPort),
+            )
             udpFlows[key] = flow
             flow.send(p)
         } catch (e: IOException) {
@@ -546,7 +680,14 @@ class ForwardingEngine(
         }
     }
 
-    private inner class UdpFlow(val key: String, first: IpPacket, val owner: String?, val record: Record) {
+    private inner class UdpFlow(
+        val key: String,
+        first: IpPacket,
+        val owner: String?,
+        val record: Record,
+        /** Where datagrams really go: the app's server, or Tor's DNS port. Replies still appear to come from the app's server. */
+        target: InetSocketAddress,
+    ) {
         private val v6 = first.v6
         private val app = first.src
         private val appPort = first.srcPort
@@ -560,7 +701,7 @@ class ForwardingEngine(
         init {
             channel.configureBlocking(false)
             protector.protect(channel.socket())
-            channel.connect(InetSocketAddress(InetAddress.getByAddress(remote), remotePort))
+            channel.connect(target)
             selectionKey = channel.register(selector, SelectionKey.OP_READ, this)
         }
 
@@ -632,6 +773,15 @@ class ForwardingEngine(
         blockedFlows.clear()
         tcpFlows.values.filter { it.owner != null && it.owner in packages }.forEach { it.close(reset = true) }
         udpFlows.values.filter { it.owner != null && it.owner in packages }.forEach { it.close() }
+    }
+
+    private fun applyRoute(newRoute: TorRoute?) {
+        if (newRoute == route) return
+        route = newRoute
+        // New identity, new ports or Tor gone: drop every connection so apps reconnect on the
+        // new circuits (or are refused while Tor is down).
+        tcpFlows.values.toList().forEach { it.close(reset = true) }
+        udpFlows.values.toList().forEach { it.close() }
     }
 
     private class Record(
@@ -720,6 +870,7 @@ class ForwardingEngine(
         const val RTO_MS = 400L
         const val MAX_RETRIES = 8
         const val CONNECT_TIMEOUT_MS = 20_000L
+        const val TOR_CONNECT_TIMEOUT_MS = 45_000L
         const val IDLE_TIMEOUT_MS = 10 * 60_000L
         const val HALF_CLOSED_TIMEOUT_MS = 60_000L
         const val UDP_TIMEOUT_MS = 60_000L
@@ -727,6 +878,14 @@ class ForwardingEngine(
         const val MAX_INBOX = 10_000
         const val MAX_RECORDS = 500
         const val SNIFF_LIMIT = 4096
+
+        const val SOCKS_DONE = 0
+        const val SOCKS_METHOD = 1
+        const val SOCKS_AUTH = 2
+        const val SOCKS_REPLY_HEAD = 3
+        const val SOCKS_REPLY_REST = 4
+        const val SOCKS_REPLY_MAX = 4 + 1 + 255 + 2
+        val LOOPBACK: InetAddress = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
     }
 }
 

@@ -3,10 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        Used ONLY by the live monitor, which the user starts by hand: while it runs, other apps'
-        traffic is relayed through Gatekeeper so their connections can be shown. Gatekeeper never
-        opens connections of its own (no analytics, no updates, no servers of ours) and in normal
-        mode it relays nothing at all.
+        Used ONLY by two features the user turns on by hand:
+        - the live monitor, which relays other apps' traffic so their connections can be shown;
+        - Tor mode (experimental), which runs Tor inside Gatekeeper and relays other apps'
+          traffic through the Tor network.
+        Gatekeeper never opens connections of its own (no analytics, no updates, no servers of
+        ours) and in normal mode it relays nothing at all.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
 

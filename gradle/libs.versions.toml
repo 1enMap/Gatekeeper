@@ -10,7 +10,7 @@ room = "2.8.4"
 datastore = "1.1.7"
 coroutines = "1.10.2"
 junit = "4.13.2"
-torAndroid = "0.4.9.13.2"
+torAndroid = "0.4.9.14"
 jtorctl = "0.4.5.7"
 
 [libraries]

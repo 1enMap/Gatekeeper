@@ -7,7 +7,10 @@ plugins {
 
 android {
     namespace = "app.gatekeeper"
-    compileSdk = 36
+    // tor-android (Tor mode) is built against Android 37.1 and requires consumers to compile
+    // against at least that. Only the compile SDK changes; targetSdk stays 36.
+    compileSdk = 37
+    compileSdkMinor = 1
 
     defaultConfig {
         applicationId = "app.gatekeeper"

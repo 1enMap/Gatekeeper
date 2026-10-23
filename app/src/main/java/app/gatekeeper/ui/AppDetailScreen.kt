@@ -25,6 +25,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.data.AppRule
 import app.gatekeeper.data.Mode
+import app.gatekeeper.data.Route
+import app.gatekeeper.insights.KnownApps
+import androidx.compose.material3.Switch
 import app.gatekeeper.insights.Risk
 import app.gatekeeper.insights.TrackerDomains
 import androidx.compose.material3.OutlinedButton
@@ -120,6 +123,8 @@ fun AppDetailScreen(
                 )
             }
 
+            PrivacyRoutingCard(viewModel, row)
+
             audits?.firstOrNull { it.packageName == packageName }?.let { audit ->
                 SectionCard {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -188,6 +193,58 @@ fun AppDetailScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PrivacyRoutingCard(viewModel: MainViewModel, row: AppRow) {
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val pkg = row.app.packageName
+    val torOn = settings?.torMode == true
+    val payment = KnownApps.isPaymentApp(pkg, row.app.label)
+    val whatsapp = pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b"
+
+    SectionCard {
+        Text("Privacy", style = MaterialTheme.typography.titleMedium)
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Through Tor", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Hides your IP address from the servers this app talks to. If Tor isn't " +
+                        "connected, this app stays offline: it never falls back to a direct connection.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(checked = row.route == Route.TOR, onCheckedChange = { viewModel.setRoute(pkg, if (it) Route.TOR else Route.DIRECT) })
+        }
+        if (row.route == Route.TOR && !torOn) {
+            StatusLine(ok = false, warn = true, text = "Tor mode is off on the home screen, so this app goes direct for now")
+        }
+        if (payment) {
+            StatusLine(
+                ok = row.route != Route.TOR,
+                warn = true,
+                text = "Looks like a payment or banking app. These expect an Indian connection and usually " +
+                    "fail or lock you out over Tor. Keep it direct.",
+            )
+        }
+        if (whatsapp && row.route == Route.TOR) {
+            StatusLine(ok = false, warn = true, text = "Messages work over Tor, but voice and video calls won't (Tor carries no UDP)")
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Block trackers", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Stops this app reaching known ad, analytics and crash-reporting servers; the app " +
+                        "itself keeps working. If something in the app breaks (e.g. \"Log in with " +
+                        "Facebook\"), turn this off.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(checked = row.blockTrackers, onCheckedChange = { viewModel.setBlockTrackers(pkg, it) })
         }
     }
 }

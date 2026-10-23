@@ -13,6 +13,7 @@ import app.gatekeeper.data.AppRule
 import app.gatekeeper.data.InstalledApp
 import app.gatekeeper.data.InstalledApps
 import app.gatekeeper.data.Mode
+import app.gatekeeper.data.Route
 import app.gatekeeper.data.SettingsState
 import app.gatekeeper.engine.ActivityEntry
 import app.gatekeeper.foreground.ForegroundAccessibilityService
@@ -39,6 +40,8 @@ data class AppRow(
     val graceSeconds: Int,
     /** Currently has internet (Allowed, or While open and on screen / in grace period). */
     val hasInternetNow: Boolean,
+    val route: Route = Route.DIRECT,
+    val blockTrackers: Boolean = false,
 )
 
 data class ListFilters(
@@ -90,6 +93,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         Mode.BLOCKED -> false
                         Mode.WHILE_OPEN -> a.packageName in allowedNow
                     },
+                    route = rule?.route ?: Route.DIRECT,
+                    blockTrackers = rule?.blockTrackers ?: false,
                 )
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -151,6 +156,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setMode(pkg: String, mode: Mode) = app.setMode(pkg, mode)
     fun setGrace(pkg: String, seconds: Int) = app.setGrace(pkg, seconds)
+    fun setRoute(pkg: String, route: Route) = app.setRoute(pkg, route)
+    fun setBlockTrackers(pkg: String, block: Boolean) = app.setBlockTrackers(pkg, block)
+
+    /** "My apps": the ones shown in the app list by default (not hidden system components). */
+    fun setBlockTrackersForMyApps(block: Boolean) {
+        val mine = installed.value.orEmpty().filter { !it.isSystem }.map { it.packageName }
+        app.setBlockTrackers(mine, block)
+    }
 
     fun setFirewall(enabled: Boolean): Boolean {
         val ctx = getApplication<Application>()

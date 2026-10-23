@@ -57,8 +57,8 @@ fun OnboardingScreen(
                     Text("1. Allow the local VPN", style = MaterialTheme.typography.titleLarge)
                     Text(
                         "Gatekeeper uses Android's VPN feature to drop the traffic of apps you block. " +
-                            "Nothing is sent anywhere. Gatekeeper only relays other apps' traffic while you " +
-                            "run the Live monitor, and never contacts any server of its own.",
+                            "Nothing is sent anywhere. Gatekeeper only relays other apps' traffic for features " +
+                            "you turn on (Live monitor, Tor, tracker blocking) and never contacts any server of its own.",
                     )
                     StatusLine(checks.vpnConsent, if (checks.vpnConsent) "VPN permission granted" else "VPN permission not granted yet")
                     Button(onClick = onRequestVpnConsent, enabled = !checks.vpnConsent) { Text("Allow VPN") }

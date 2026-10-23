@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.R
 import app.gatekeeper.data.Mode
+import app.gatekeeper.data.Route
 
 @Composable
 fun AppListScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpen: (String) -> Unit, onLive: (String) -> Unit) {
@@ -127,6 +128,12 @@ private fun AppRowItem(row: AppRow, onOpen: (String) -> Unit, onMode: (String, M
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (row.route == Route.TOR || row.blockTrackers) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
+                    if (row.route == Route.TOR) Pill("Tor", TorColor)
+                    if (row.blockTrackers) Pill("No trackers", TrackerColor)
+                }
+            }
         }
         IconButton(onClick = { onLive(pkg) }) {
             Icon(painterResource(R.drawable.ic_info), contentDescription = "Live activity")

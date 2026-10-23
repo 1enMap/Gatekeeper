@@ -55,6 +55,21 @@ object HostSniffer {
         return null
     }
 
+    /**
+     * True while [data] looks like the start of a TLS ClientHello or an HTTP request that hasn't
+     * fully arrived, so the server name may still come. False means "this is all we'll learn".
+     */
+    fun mayBeIncomplete(data: ByteArray, off: Int, len: Int): Boolean {
+        if (len <= 0) return true
+        if (data[off].toInt() == 22) { // TLS handshake record.
+            if (len < 5) return true
+            return len < 5 + IpPacket.u16(data, off + 3)
+        }
+        val text = String(data, off, minOf(len, 2048), Charsets.ISO_8859_1)
+        val looksHttp = HTTP_METHODS.any { m -> text.startsWith("$m ") || "$m ".startsWith(text) }
+        return looksHttp && !text.contains("\r\n\r\n")
+    }
+
     private val HTTP_METHODS = setOf("GET", "POST", "PUT", "HEAD", "DELETE", "OPTIONS", "PATCH", "CONNECT")
 
     private fun cleanHost(host: String): String? =
@@ -95,6 +110,22 @@ object DnsAnswers {
             i += rdLen
         }
         return result
+    }
+
+    /**
+     * A "no such domain" (NXDOMAIN) answer to a DNS query, echoing its ID and question, or null
+     * if the query can't be parsed. Used to refuse lookups of tracker servers.
+     */
+    fun nxdomain(b: ByteArray, off: Int, len: Int): ByteArray? {
+        if (len < 13 || b[off + 2].toInt() and 0x80 != 0 || IpPacket.u16(b, off + 4) != 1) return null
+        val (_, afterName) = readName(b, off, off + 12, off + len) ?: return null
+        val end = afterName + 4 // QTYPE + QCLASS
+        if (end > off + len) return null
+        val out = b.copyOfRange(off, end)
+        out[2] = (0x80 or (out[2].toInt() and 0x79)).toByte() // QR=1, keep opcode and RD.
+        out[3] = (0x80 or 3).toByte() // RA=1, RCODE=3 (NXDOMAIN).
+        for (i in 6 until 12) out[i] = 0 // No answer, authority or additional records.
+        return out
     }
 
     /** The name asked for in a DNS query, or null. */

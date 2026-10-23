@@ -54,6 +54,22 @@ object KnownApps {
 
     private val BRAND_NAMES = mapOf("whatsapp" to "WhatsApp", "instagram" to "Instagram")
 
+    /** UPI, wallet and bank apps: they expect an Indian IP and break over Tor. */
+    private val PAYMENT_APPS = setOf(
+        "net.one97.paytm", "com.phonepe.app", "com.google.android.apps.nbu.paisa.user", "in.org.npci.upiapp",
+        "com.sbi.lotusintouch", "com.csam.icici.bank.imobile", "com.snapwork.hdfc", "com.axis.mobile",
+        "com.msf.kbank.mobile", "com.dreamplug.androidapp", "com.mobikwik_new", "com.freecharge.android",
+        "com.paypal.android.p2pmobile", "com.google.android.apps.walletnfcrel",
+    )
+    private val PAYMENT_WORDS = listOf("bank", "upi", "wallet", " pay", "pay ")
+
+    /** Likely a payment or banking app, by package or by name. */
+    fun isPaymentApp(packageName: String, label: String): Boolean {
+        if (packageName in PAYMENT_APPS) return true
+        val name = " ${label.lowercase()} "
+        return PAYMENT_WORDS.any { name.contains(it) }
+    }
+
     fun isOfficialPackage(packageName: String): Boolean = OFFICIAL.values.any { packageName in it }
 
     /** If [label] claims to be a well-known app but [packageName] isn't it, returns the brand. */

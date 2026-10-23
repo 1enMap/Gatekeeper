@@ -47,3 +47,4 @@ fun relativeTime(millis: Long): String =
     DateUtils.getRelativeTimeSpanString(millis, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
 
 val TrackerColor = Color(0xFF6A1B9A)
+val TorColor = Color(0xFF7E4798)

@@ -20,6 +20,10 @@ data class LiveEntry(
     val bytesIn: Long,
     val open: Boolean,
     val blocked: Boolean,
+    /** "Tor" when the connection went through Tor. */
+    val via: String? = null,
+    /** Extra reason it was blocked, e.g. "tracker". */
+    val note: String? = null,
 )
 
 /** Process-wide live view, published by the forwarding engine a couple of times per second. */

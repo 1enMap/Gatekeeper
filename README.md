@@ -106,28 +106,40 @@ The forwarder has JVM tests in `app/src/test/java/app/gatekeeper/monitor/` that 
 
 Every packet the engine produces is checksum-verified.
 
-## Tor mode (experimental)
+## Tor mode (experimental, per app)
 
-Turn on **Tor mode** on the home screen and every app's traffic goes through the [Tor network](https://www.torproject.org/). Tor runs inside Gatekeeper (Guardian Project's [tor-android](https://github.com/guardianproject/tor-android), the same Tor that Orbot uses), as a **client only**: your phone never relays anyone else's traffic.
+Turn on **Tor mode** on the home screen, then choose which apps use it: **Apps → app → Through Tor**. Those apps' traffic goes through the [Tor network](https://www.torproject.org/); every other app stays direct, as if Gatekeeper weren't there. Tor runs inside Gatekeeper (Guardian Project's [tor-android](https://github.com/guardianproject/tor-android), the same Tor that Orbot uses), as a **client only**: your phone never relays anyone else's traffic. Tor itself only starts while at least one app uses it.
 
-**How it works:** Tor mode uses the live monitor's tunnel (every app except Gatekeeper is routed in) with one change in `monitor/ForwardingEngine.kt`: instead of opening a direct socket for each connection, the engine opens it through Tor's local SOCKS port. The app's SYN-ACK is sent only after Tor has opened the stream, so a failed circuit looks to the app like a refused connection.
+**How it works:** only apps that need Gatekeeper's relay are put in the tunnel (Tor apps, tracker-blocking apps, and Blocked / While open apps so their switching never rebuilds the tunnel). `monitor/ForwardingEngine.kt` opens each Tor app's connection through Tor's local SOCKS port; the app's SYN-ACK is sent only after Tor has opened the stream, so a failed circuit looks to the app like a refused connection.
 
 - **Per-app circuits.** The SOCKS username is the app's package name. Tor keeps streams with different usernames on different circuits (`IsolateSOCKSAuth`), so traffic from two apps can't easily be linked by a single exit.
-- **New identity** bumps a counter in the SOCKS password and sends `NEWNYM`: open connections are reset and every app reconnects on fresh circuits.
-- **DNS** (UDP 53, to any server) is answered by Tor's resolver (`DNSPort`), so lookups don't leak. `.onion` names resolve to placeholder addresses that Tor maps back.
-- **Other UDP is dropped**, because Tor carries only TCP. QUIC falls back to TCP. Dropped flows show as blocked in the live view.
-- **Fails closed.** Until Tor reports 100 % bootstrapped, new connections are refused and DNS gets no answer. Nothing is ever relayed directly. If Tor fails, apps stay offline until you retry or turn Tor mode off.
-- **Blocked apps stay blocked**, and the live monitor view works while Tor mode is on.
+- **New identity** bumps a counter in the SOCKS password and sends `NEWNYM`: open Tor connections are reset and every Tor app reconnects on fresh circuits. Direct apps are unaffected.
+- **DNS** of Tor apps (UDP 53, to any server) is answered by Tor's resolver (`DNSPort`), so lookups don't leak. `.onion` names resolve to placeholder addresses that Tor maps back.
+- **Other UDP from Tor apps is dropped**, because Tor carries only TCP. QUIC falls back to TCP; voice/video calls don't work.
+- **Fails closed, per app.** Until Tor reports 100 % bootstrapped, a Tor app's new connections are refused and its DNS gets no answer; nothing of a Tor app is ever relayed directly. If Tor fails, Tor apps stay offline until you retry or switch them back to direct. Connections Android can't attribute to an app are sent through Tor whenever any app uses Tor.
+- **Turning Tor mode off** (home screen) sends every app direct again; the per-app choices are kept for next time.
 
 **Limits (shown in the app too):**
 - Tor hides your IP address, not your identity: log into an account and that site knows it's you.
+- **Payment and banking (UPI) apps** expect an Indian connection and usually fail or lock you out over Tor. The app warns if you pick one. Register or re-verify accounts (e.g. WhatsApp) on a direct connection.
 - It's slow, and some sites block or CAPTCHA Tor exits.
-- Voice/video calls, games and other UDP-only apps don't work. Devices on your local network (printers, casting) can't be reached.
+- While the phone boots, before Gatekeeper's VPN is up, Tor apps can go online directly for a few seconds. (Always-on VPN with "Block connections without VPN" would close that gap, but it also cuts off every direct app, so it can't be used with per-app routing.)
+- Connections an app opened *before* you switched it to Tor may continue until they close; Android normally ends them when the app joins the VPN. Restart the app to be sure.
 - Your mobile network or Wi-Fi can see that you use Tor (not what for). Bridges aren't supported yet.
-- During boot, before Gatekeeper's VPN is up, apps can go online directly. To close that gap, set Gatekeeper as **Always-on VPN** with **Block connections without VPN**. That's safe only with Tor mode on: in normal mode it cuts off every app Gatekeeper doesn't block.
 - Not audited. Don't rely on it where your safety depends on anonymity; use Tor Browser or Tails for that.
 
-Tor adds roughly 10–15 MB per CPU architecture to the APK.
+Tor adds roughly 7–8 MB per CPU architecture to the APK.
+
+## Tracker blocking (per app)
+
+**Apps → app → Block trackers** (or **Settings → Tracker blocking → Block in all my apps**) stops an app from reaching known advertising, analytics and crash-reporting servers while the app itself keeps working. It's off by default.
+
+- **DNS:** a tracking app's lookup of a tracker server gets an NXDOMAIN ("no such domain") answer and is never sent anywhere.
+- **Connections:** a tracking app's TCP stream is held inside Gatekeeper until its server name is known (TLS SNI or HTTP `Host`, reassembled across segments); a tracker's connection is reset before a single byte reaches it. Addresses already known to belong to trackers are refused without connecting. QUIC is stopped so apps fall back to TCP, where the name is visible.
+- **The list** (`insights/TrackerDomains.kt`, about 100 domains plus all their subdomains) is built in and only changes with app updates: Gatekeeper never downloads anything. Domains apps need to work, such as Firebase Cloud Messaging (push notifications), are deliberately not on it.
+- **If an app breaks** (for example "Log in with Facebook" uses `graph.facebook.com`), turn tracker blocking off for that app.
+- Blocked trackers show in the live view ("tracker blocked") and the Connection log.
+- Encrypted Client Hello (ECH) hides server names; as it spreads, connection-level blocking catches less, while DNS-level blocking keeps working.
 
 ## Recent activity log
 
@@ -148,7 +160,7 @@ The home screen lists the latest allow/block decisions with timestamps (for exam
 | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Lets onboarding show the system dialog that stops Android from killing the firewall. |
 | `ACCESS_NETWORK_STATE` | Reads whether Private DNS is on, to explain what the connection log can show. Grants no network access. |
 | `WAKE_LOCK` | Holds the CPU awake for at most the grace period after the screen turns off, so While open apps are re-blocked on time. |
-| `INTERNET` | Used **only by the Live monitor**, while you run it, to relay other apps' traffic. Gatekeeper never opens connections of its own. |
+| `INTERNET` | Used only to relay other apps' traffic: while you run the Live monitor, for apps you send through Tor (and by Tor itself), and for apps with tracker blocking. Gatekeeper never opens connections of its own. |
 
 ## Setup (also covered by the in-app onboarding)
 

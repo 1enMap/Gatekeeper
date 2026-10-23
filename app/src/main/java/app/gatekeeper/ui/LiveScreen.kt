@@ -83,18 +83,16 @@ fun LiveScreen(
                             Column(Modifier.weight(1f)) {
                                 Text(
                                     when {
-                                        status.torMode -> "● Watching traffic going through Tor"
                                         status.monitoring -> "● Watching all traffic"
                                         requested -> "Starting…"
+                                        status.relaying -> "● Watching Tor and tracker-blocking apps"
                                         else -> "Monitor is off"
                                     },
                                     style = MaterialTheme.typography.titleMedium,
                                     color = if (status.monitoring) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
                                 )
                             }
-                            if (status.torMode) {
-                                // Tor mode already relays everything; it is turned off on the home screen.
-                            } else if (status.monitoring || requested) {
+                            if (status.monitoring || requested) {
                                 Button(
                                     onClick = onStop,
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
@@ -110,10 +108,11 @@ fun LiveScreen(
                                 "more battery: stop it when you're done (it also stops on restart).",
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        if (status.torMode) {
+                        if (status.relaying && !status.monitoring) {
                             Text(
-                                "Tor mode is on, so this view is live while it runs. Addresses are the ones apps " +
-                                    "asked for; sites see a Tor exit instead of your IP. Dropped UDP shows as blocked.",
+                                "Apps going through Tor or with tracker blocking are shown even without the " +
+                                    "monitor. Start it to see every app. For Tor apps, addresses are the ones the " +
+                                    "app asked for; servers see a Tor exit instead of your IP.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -245,11 +244,16 @@ private fun LiveRow(
             }
             Spacer(Modifier.width(6.dp))
             when {
+                entry.note == "tracker" -> Pill("tracker blocked", TrackerColor)
                 entry.blocked -> Pill("blocked", Color(0xFFC62828))
                 entry.protocol == "QUIC" -> Pill("QUIC→TCP", Color.Gray)
                 entry.open -> Pill("open", Color(0xFF2E7D32))
             }
-            tracker?.let {
+            if (entry.via == "Tor") {
+                Spacer(Modifier.width(4.dp))
+                Pill("via Tor", TorColor)
+            }
+            if (tracker != null && entry.note != "tracker") {
                 Spacer(Modifier.width(4.dp))
                 Pill("tracker", TrackerColor)
             }

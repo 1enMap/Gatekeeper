@@ -82,6 +82,8 @@ fun SettingsScreen(viewModel: MainViewModel, insights: InsightsViewModel, onBack
                 }
             }
 
+            TrackerBlockingCard(viewModel)
+
             SectionCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -98,6 +100,38 @@ fun SettingsScreen(viewModel: MainViewModel, insights: InsightsViewModel, onBack
             }
 
             OutlinedButton(onClick = onRunSetup, modifier = Modifier.fillMaxWidth()) { Text("Run setup guide again") }
+        }
+    }
+}
+
+@Composable
+private fun TrackerBlockingCard(viewModel: MainViewModel) {
+    val rows by viewModel.allRows.collectAsStateWithLifecycle()
+    val mine = rows.orEmpty().filter { !it.app.isSystem }
+    val blocking = mine.count { it.blockTrackers }
+
+    SectionCard {
+        Text("Tracker blocking", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Stops apps from reaching known ad, analytics and crash-reporting servers while the apps " +
+                "themselves keep working. Turn it on per app (Apps → app → Block trackers) or for all " +
+                "your apps here. The tracker list is built into Gatekeeper and updated with the app; " +
+                "nothing is downloaded.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text("On in $blocking of ${mine.size} apps", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            "Apps with tracker blocking pass through Gatekeeper's relay, which uses a little more battery. " +
+                "If an app misbehaves, turn it off for that app.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { viewModel.setBlockTrackersForMyApps(true) }, enabled = blocking < mine.size) {
+                Text("Block in all my apps")
+            }
+            OutlinedButton(onClick = { viewModel.setBlockTrackersForMyApps(false) }, enabled = blocking > 0) {
+                Text("Turn off everywhere")
+            }
         }
     }
 }

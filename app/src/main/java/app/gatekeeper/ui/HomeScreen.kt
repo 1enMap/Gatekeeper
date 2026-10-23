@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.R
 import app.gatekeeper.data.Mode
+import app.gatekeeper.data.Route
 import app.gatekeeper.insights.Risk
 import app.gatekeeper.tor.TorState
 import app.gatekeeper.vpn.GatekeeperVpnService
@@ -118,7 +119,7 @@ fun HomeScreen(
                         text = if (status.alwaysOn) "Always-on VPN enabled" else "Always-on VPN not enabled (recommended)",
                     )
                 }
-                if (status.lockdown && settings?.torMode != true) {
+                if (status.lockdown) {
                     StatusLine(
                         ok = false,
                         text = "\"Block connections without VPN\" is on. This cuts off every app Gatekeeper " +
@@ -145,7 +146,13 @@ fun HomeScreen(
                 )
             }
 
-            TorCard(viewModel, status, torModeOn = settings?.torMode == true, onToggleTor = onToggleTor)
+            TorCard(
+                viewModel, status,
+                torModeOn = settings?.torMode == true,
+                torAppCount = rows?.count { it.route == Route.TOR } ?: 0,
+                onToggleTor = onToggleTor,
+                onChooseApps = { navigate(Screen.Apps) },
+            )
 
             PrivacyCheckupCard(insights, navigate)
             OutlinedButton(onClick = { navigate(Screen.Onboarding) }, modifier = Modifier.fillMaxWidth()) {
@@ -237,7 +244,9 @@ private fun TorCard(
     viewModel: MainViewModel,
     status: GatekeeperVpnService.Status,
     torModeOn: Boolean,
+    torAppCount: Int,
     onToggleTor: (Boolean) -> Unit,
+    onChooseApps: () -> Unit,
 ) {
     val context = LocalContext.current
     val tor by viewModel.torState.collectAsStateWithLifecycle()
@@ -260,14 +269,22 @@ private fun TorCard(
 
         when {
             !torModeOn -> Text(
-                "Sends every app's traffic through the Tor network, each app on its own circuit. " +
-                    "Sites and your mobile network can no longer link what you do to your IP address.",
+                "Sends the apps you choose through the Tor network, each app on its own circuit, so the " +
+                    "servers they talk to don't see your IP address. Other apps stay direct.",
                 style = MaterialTheme.typography.bodySmall,
             )
+            torAppCount == 0 -> {
+                StatusLine(ok = false, warn = true, text = "No apps chosen yet. Open an app and turn on \"Through Tor\".")
+                OutlinedButton(onClick = onChooseApps) { Text("Choose apps") }
+            }
             !status.running -> StatusLine(ok = false, warn = true, text = "Starts when the firewall is on")
             else -> when (val t = tor) {
                 is TorState.Ready -> {
-                    StatusLine(ok = true, text = "Connected. All apps go through Tor.")
+                    StatusLine(
+                        ok = true,
+                        text = "Connected. ${if (torAppCount == 1) "1 app goes" else "$torAppCount apps go"} through Tor; " +
+                            "all others are direct.",
+                    )
                     OutlinedButton(onClick = { viewModel.newTorIdentity() }, modifier = Modifier.fillMaxWidth()) {
                         Text("New identity (fresh circuits)")
                     }
@@ -279,14 +296,14 @@ private fun TorCard(
                     )
                     LinearProgressIndicator(progress = { t.progress / 100f }, modifier = Modifier.fillMaxWidth())
                     Text(
-                        "Apps are offline until Tor connects. Nothing goes out without Tor.",
+                        "Tor apps are offline until Tor connects; none of their traffic goes out without Tor.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
                 is TorState.Failed -> {
                     StatusLine(ok = false, text = t.message)
                     Text(
-                        "Apps stay offline rather than leak. Retry, or turn Tor mode off to go back to normal.",
+                        "Tor apps stay offline rather than leak. Retry, or turn Tor mode off to send them direct.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     OutlinedButton(onClick = { viewModel.retryTor() }) { Text("Retry") }
@@ -302,15 +319,11 @@ private fun TorCard(
                     "UDP apps won't work. Devices on your Wi-Fi (printers, casting) can't be reached.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            if (status.running && !(status.alwaysOn && status.lockdown)) {
-                Text(
-                    "For no leaks while the phone boots or Gatekeeper restarts, turn on \"Always-on VPN\" " +
-                        "and \"Block connections without VPN\" for Gatekeeper. (Only with Tor mode on: " +
-                        "in normal mode that setting cuts off every app.)",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                OutlinedButton(onClick = { SystemIntents.openVpnSettings(context) }) { Text("Open VPN settings") }
-            }
+            Text(
+                "While the phone boots, before Gatekeeper starts, Tor apps can go online directly for a " +
+                    "few seconds. Payment and banking apps break over Tor: keep them direct.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }

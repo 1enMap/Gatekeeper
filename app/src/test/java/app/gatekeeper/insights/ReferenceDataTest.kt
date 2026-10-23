@@ -24,4 +24,25 @@ class ReferenceDataTest {
         assertNull(KnownApps.impersonatedBrand("Gatekeeper", "app.gatekeeper"))
         assertNull(KnownApps.impersonatedBrand("Threads, an Instagram app", "com.instagram.barcelona"))
     }
+
+    @Test
+    fun adobeAndFirebaseTrackersFromTheConnectionLogAreKnown() {
+        assertEquals("Analytics / tracking", TrackerDomains.categoryOf("adobe.tt.omtrdc.net"))
+        assertEquals("Analytics / tracking", TrackerDomains.categoryOf("assets.adobedtm.com"))
+        assertEquals("Advertising", TrackerDomains.categoryOf("dpm.demdex.net"))
+        assertEquals("Analytics / tracking", TrackerDomains.categoryOf("firebaselogging.googleapis.com"))
+        // Needed for push notifications and app installs: must not be treated as trackers.
+        assertNull(TrackerDomains.categoryOf("fcm.googleapis.com"))
+        assertNull(TrackerDomains.categoryOf("firebaseinstallations.googleapis.com"))
+        assertNull(TrackerDomains.categoryOf("cc-api-data.adobe.io"))
+    }
+
+    @Test
+    fun paymentAppsAreRecognised() {
+        org.junit.Assert.assertTrue(KnownApps.isPaymentApp("com.phonepe.app", "PhonePe"))
+        org.junit.Assert.assertTrue(KnownApps.isPaymentApp("com.example.x", "Some Bank"))
+        org.junit.Assert.assertTrue(KnownApps.isPaymentApp("com.example.y", "Amazon Pay"))
+        org.junit.Assert.assertFalse(KnownApps.isPaymentApp("com.android.vending", "Google Play Store"))
+        org.junit.Assert.assertFalse(KnownApps.isPaymentApp("com.example.z", "Display Settings"))
+    }
 }

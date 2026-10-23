@@ -26,6 +26,30 @@ class RuleRepository(
         dao.upsert(existing?.copy(graceSeconds = clamped) ?: AppRule(packageName, defaultMode, clamped))
     }
 
+    suspend fun setRoute(packageName: String, route: Route, defaultGrace: Int) {
+        if (packageName == ownPackage) return // Gatekeeper's own traffic (Tor itself) is never routed.
+        val existing = dao.get(packageName)
+        dao.upsert(existing?.copy(route = route) ?: AppRule(packageName, Mode.ALLOWED, defaultGrace, route = route))
+    }
+
+    suspend fun setBlockTrackers(packageName: String, block: Boolean, defaultGrace: Int) {
+        if (packageName == ownPackage) return
+        val existing = dao.get(packageName)
+        dao.upsert(existing?.copy(blockTrackers = block) ?: AppRule(packageName, Mode.ALLOWED, defaultGrace, blockTrackers = block))
+    }
+
+    /** Turns tracker blocking on or off for many apps at once. */
+    suspend fun setBlockTrackers(packageNames: Collection<String>, block: Boolean, defaultGrace: Int) {
+        val targets = packageNames.filter { it != ownPackage }
+        if (targets.isEmpty()) return
+        val existing = dao.getAll(targets).associateBy { it.packageName }
+        dao.upsertAll(
+            targets.map { pkg ->
+                existing[pkg]?.copy(blockTrackers = block) ?: AppRule(pkg, Mode.ALLOWED, defaultGrace, blockTrackers = block)
+            },
+        )
+    }
+
     suspend fun remove(packageName: String) = dao.delete(packageName)
 
     suspend fun removeAll(packageNames: Collection<String>) {

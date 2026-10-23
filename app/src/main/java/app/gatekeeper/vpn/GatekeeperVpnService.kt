@@ -21,7 +21,12 @@ import app.gatekeeper.gatekeeper
 import app.gatekeeper.data.ConnectionAttempt
 import app.gatekeeper.insights.OwnerLookup
 import app.gatekeeper.insights.TrafficObserver
+import app.gatekeeper.data.Mode
+import app.gatekeeper.data.Route
 import app.gatekeeper.monitor.ForwardingEngine
+import app.gatekeeper.monitor.RelayPolicy
+import app.gatekeeper.monitor.TunnelAddresses
+import java.net.InetSocketAddress
 import app.gatekeeper.monitor.LiveMonitor
 import app.gatekeeper.tor.TorState
 import android.net.ConnectivityManager
@@ -77,10 +82,10 @@ class GatekeeperVpnService : VpnService() {
     @Volatile private var tunnel: ParcelFileDescriptor? = null
     @Volatile private var drainer: TunnelDrainer? = null
     @Volatile private var forwarder: ForwardingEngine? = null
-    /** DNS servers the current monitor tunnel was built with. */
-    private var monitorDns: List<InetAddress>? = null
-    /** The running forwarder relays through Tor. */
-    @Volatile private var forwarderTor = false
+    /** Apps in the running forwarder's tunnel; null means every app (live monitor). */
+    private var forwarderMembers: Set<String>? = null
+    /** The plan last applied, for the status card and notification. */
+    @Volatile private var lastPlan: TunnelPlan? = null
     private val finishedConnections = ConcurrentLinkedQueue<ConnectionAttempt>()
     private val underlyingDns = MutableStateFlow<List<InetAddress>>(emptyList())
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -129,29 +134,43 @@ class GatekeeperVpnService : VpnService() {
         val torMode = gatekeeper.settings.state.map { it.torMode }.distinctUntilChanged()
 
         @OptIn(FlowPreview::class)
-        rulesJob = combine(gatekeeper.engine.blockedPackages.filterNotNull(), _monitoring, torMode, underlyingDns) { blocked, monitor, tor, dns ->
-            // DNS servers only matter for the monitor tunnel; ignoring them otherwise avoids rebuilds.
-            TunnelPlan(blocked, monitor, tor, if (monitor && !tor) dns else emptyList())
+        rulesJob = combine(
+            gatekeeper.engine.blockedPackages.filterNotNull(),
+            _monitoring,
+            torMode,
+            gatekeeper.rules.rules,
+            underlyingDns,
+        ) { blocked, monitor, torOn, rules, dns ->
+            val torApps = if (torOn) rules.values.filter { it.route == Route.TOR }.mapTo(HashSet()) { it.packageName } else emptySet()
+            TunnelPlan(
+                blocked = blocked - packageName,
+                monitor = monitor,
+                torOn = torOn,
+                torApps = torApps - packageName,
+                trackerApps = rules.values.filter { it.blockTrackers }.mapTo(HashSet()) { it.packageName } - packageName,
+                whileOpen = rules.values.filter { it.mode == Mode.WHILE_OPEN }.mapTo(HashSet()) { it.packageName } - packageName,
+                dns = dns,
+            )
         }
             .debounce(REBUILD_DEBOUNCE_MS)
             .distinctUntilChanged()
             .onEach { plan ->
                 withContext(tunnelDispatcher) {
-                    when {
-                        plan.tor -> applyForwarding(plan.blocked - packageName, emptyList(), tor = true)
-                        plan.monitor -> applyForwarding(plan.blocked - packageName, plan.dns, tor = false)
-                        else -> applyBlockedSet(plan.blocked)
-                    }
+                    lastPlan = plan
+                    if (plan.monitor || plan.relayed.isNotEmpty()) applyForwarding(plan) else applyBlockedSet(plan.blocked)
                 }
             }
             .launchIn(scope)
 
         torJob = scope.launch {
-            // Tor runs only while the firewall runs with Tor mode on.
-            launch { torMode.collect { on -> if (on) gatekeeper.tor.start() else gatekeeper.tor.stop() } }
+            // Tor runs only while the firewall runs with Tor mode on and at least one app uses it.
+            launch {
+                combine(torMode, gatekeeper.rules.rules) { on, rules -> on && rules.values.any { it.route == Route.TOR } }
+                    .distinctUntilChanged()
+                    .collect { needed -> if (needed) gatekeeper.tor.start() else gatekeeper.tor.stop() }
+            }
             gatekeeper.tor.state.collect { state ->
-                val route = (state as? TorState.Ready)?.route
-                forwarder?.takeIf { forwarderTor }?.updateTorRoute(route)
+                forwarder?.updateTorRoute((state as? TorState.Ready)?.route)
                 refreshNotification()
             }
         }
@@ -197,13 +216,13 @@ class GatekeeperVpnService : VpnService() {
 
         val builder = Builder()
             .setSession("Gatekeeper")
-            .addAddress(TUN_ADDRESS_V4, 32)
-            .addAddress(TUN_ADDRESS_V6, 128)
+            .addAddress(TunnelAddresses.ADDRESS_V4, 32)
+            .addAddress(TunnelAddresses.ADDRESS_V6, 128)
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
             // DNS servers inside the tunnel, so blocked apps' lookups are dropped as well.
-            .addDnsServer(TUN_DNS_V4)
-            .addDnsServer(TUN_DNS_V6)
+            .addDnsServer(TunnelAddresses.DNS_V4)
+            .addDnsServer(TunnelAddresses.DNS_V6)
             .setBlocking(false)
             .setMetered(false)
 
@@ -244,19 +263,18 @@ class GatekeeperVpnService : VpnService() {
         val oldTunnel = tunnel
         val oldDrainer = drainer
         val oldForwarder = forwarder
-        val wasTor = forwarderTor
+        val wasMonitor = forwarderMembers == null
         tunnel = newTunnel
         appliedPackages = applied
         drainer = TunnelDrainer(newTunnel) { buf, len ->
             if (recordConnections) observer.onPacket(buf, len)
         }.also { it.start() }
         forwarder = null
-        forwarderTor = false
-        monitorDns = null
+        forwarderMembers = null
         oldDrainer?.shutdown()
         oldForwarder?.let {
             it.shutdown()
-            gatekeeper.engine.log(null, if (wasTor) "Tor mode off" else "Live monitor off")
+            gatekeeper.engine.log(null, if (wasMonitor) "Live monitor off" else "Tor and tracker blocking off")
         }
         oldTunnel?.closeQuietly()
 
@@ -265,46 +283,72 @@ class GatekeeperVpnService : VpnService() {
     }
 
     /**
-     * Live monitor or Tor mode: route every app (except Gatekeeper) into the tunnel and relay
-     * their traffic, directly or through Tor. Changes to the blocked set are applied inside the
-     * running engine without a rebuild.
+     * Relay through the forwarding engine. Live monitor: every app except Gatekeeper is in the
+     * tunnel. Otherwise only apps that need the engine are: blocked and While open apps (so their
+     * switching never rebuilds the tunnel), Tor apps and tracker-blocking apps; everyone else
+     * stays out of Gatekeeper entirely. Rule changes that keep the same members are applied inside
+     * the running engine without a rebuild.
      */
-    private suspend fun applyForwarding(blocked: Set<String>, dns: List<InetAddress>, tor: Boolean) {
+    private suspend fun applyForwarding(plan: TunnelPlan) {
         if (stopping) return
+        val members: Set<String>? = if (plan.monitor) null else plan.blocked + plan.whileOpen + plan.relayed
+        val policy = RelayPolicy(
+            blocked = plan.blocked,
+            tor = plan.torApps,
+            trackers = plan.trackerApps,
+            directDns = plan.dns.map { InetSocketAddress(it, 53) },
+        )
         val running = forwarder
-        if (running != null && dns == monitorDns && tor == forwarderTor) {
-            running.updateBlocked(blocked)
-            appliedPackages = blocked
-            publish(blocked.size)
+        if (running != null && members == forwarderMembers) {
+            running.updatePolicy(policy)
+            appliedPackages = plan.blocked
+            publish(plan.blocked.size)
             return
         }
 
         val builder = Builder()
-            .setSession(if (tor) "Gatekeeper Tor mode" else "Gatekeeper live monitor")
-            .addAddress(TUN_ADDRESS_V4, 32)
-            .addAddress(TUN_ADDRESS_V6, 128)
+            .setSession(if (plan.monitor) "Gatekeeper live monitor" else "Gatekeeper")
+            .addAddress(TunnelAddresses.ADDRESS_V4, 32)
+            .addAddress(TunnelAddresses.ADDRESS_V6, 128)
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
+            // DNS servers inside the tunnel: the engine answers every lookup, through Tor for Tor
+            // apps (with tracker filtering where asked) and via the network's DNS for the rest.
+            .addDnsServer(TunnelAddresses.DNS_V4)
+            .addDnsServer(TunnelAddresses.DNS_V6)
             .setMtu(MONITOR_MTU)
             .setBlocking(false)
             .setMetered(false)
-        if (tor) {
-            // DNS servers inside the tunnel; the engine answers every lookup through Tor.
-            builder.addDnsServer(TUN_DNS_V4).addDnsServer(TUN_DNS_V6)
+        if (members == null) {
+            try {
+                // Our relay sockets (and Tor itself) must not loop back into the tunnel.
+                builder.addDisallowedApplication(packageName)
+            } catch (_: PackageManager.NameNotFoundException) {
+            }
         } else {
-            // Apps keep using the network's own DNS servers; their queries are relayed like any UDP.
-            dns.forEach { runCatching { builder.addDnsServer(it) } }
-        }
-        try {
-            // Our relay sockets (and Tor itself) must not loop back into the tunnel.
-            builder.addDisallowedApplication(packageName)
-        } catch (_: PackageManager.NameNotFoundException) {
+            val uninstalled = ArrayList<String>()
+            var added = 0
+            for (pkg in members) {
+                try {
+                    builder.addAllowedApplication(pkg)
+                    added++
+                } catch (_: PackageManager.NameNotFoundException) {
+                    uninstalled += pkg
+                }
+            }
+            if (uninstalled.isNotEmpty()) gatekeeper.rules.removeAll(uninstalled)
+            if (added == 0) {
+                // Never establish with zero allowed apps: that would capture EVERY app.
+                closeTunnel()
+                publish(0)
+                return
+            }
         }
 
         val newTunnel = try {
             builder.establish()
         } catch (e: Exception) {
-            Log.e(TAG, "establish() failed (monitor)", e)
+            Log.e(TAG, "establish() failed (relay)", e)
             null
         }
         if (newTunnel == null) {
@@ -319,33 +363,35 @@ class GatekeeperVpnService : VpnService() {
             },
             toTunnel = java.io.FileOutputStream(newTunnel.fileDescriptor),
             owners = owners,
-            initialBlocked = blocked,
+            initialPolicy = policy,
             onBlockedPacket = { buf, len -> if (recordConnections) observer.onPacket(buf, len) },
             finished = finishedConnections,
-            torMode = tor,
-            initialTorRoute = if (tor) currentTorRoute() else null,
+            initialTorRoute = currentTorRoute(),
         ).also { it.start() }
 
         val oldTunnel = tunnel
         val oldDrainer = drainer
         val oldForwarder = forwarder
-        val wasTor = forwarderTor
+        val oldMembers = forwarderMembers
         tunnel = newTunnel
-        appliedPackages = blocked
+        appliedPackages = plan.blocked
         forwarder = newForwarder
-        forwarderTor = tor
-        monitorDns = dns
+        forwarderMembers = members
         drainer = TunnelDrainer(newTunnel) { buf, len -> newForwarder.enqueue(buf, len) }.also { it.start() }
         // Tor may have become ready while the engine was being built.
-        if (tor) newForwarder.updateTorRoute(currentTorRoute())
+        newForwarder.updateTorRoute(currentTorRoute())
         oldDrainer?.shutdown()
         oldForwarder?.shutdown()
         oldTunnel?.closeQuietly()
 
-        if (oldForwarder == null || wasTor != tor) {
-            gatekeeper.engine.log(null, if (tor) "Tor mode on: all apps go through Tor" else "Live monitor on")
+        if (oldForwarder == null || (oldMembers == null) != (members == null)) {
+            gatekeeper.engine.log(
+                null,
+                if (members == null) "Live monitor on"
+                else "Relaying ${plan.torApps.size} apps through Tor, blocking trackers in ${plan.trackerApps.size}",
+            )
         }
-        publish(blocked.size)
+        publish(plan.blocked.size)
     }
 
     private fun currentTorRoute() = (gatekeeper.tor.state.value as? TorState.Ready)?.route
@@ -395,8 +441,7 @@ class GatekeeperVpnService : VpnService() {
         drainer = null
         forwarder?.shutdown()
         forwarder = null
-        forwarderTor = false
-        monitorDns = null
+        forwarderMembers = null
         tunnel?.closeQuietly()
         tunnel = null
     }
@@ -404,15 +449,17 @@ class GatekeeperVpnService : VpnService() {
     private suspend fun publish(blockedCount: Int) = withContext(Dispatchers.Main) {
         if (stopping) return@withContext
         val relaying = forwarder != null
-        val tor = relaying && forwarderTor
+        val plan = lastPlan
         _status.value = Status(
             running = true,
             tunnelUp = blockedCount > 0 || relaying,
             blockedCount = blockedCount,
             alwaysOn = isAlwaysOn,
             lockdown = isLockdownEnabled,
-            monitoring = relaying,
-            torMode = tor,
+            monitoring = relaying && forwarderMembers == null,
+            relaying = relaying,
+            torApps = if (relaying) plan?.torApps?.size ?: 0 else 0,
+            trackerApps = if (relaying) plan?.trackerApps?.size ?: 0 else 0,
         )
         refreshNotification()
     }
@@ -420,11 +467,12 @@ class GatekeeperVpnService : VpnService() {
     private fun refreshNotification() {
         if (stopping || !_status.value.running) return
         val s = _status.value
-        val torText = if (!s.torMode) null else when (val t = gatekeeper.tor.state.value) {
-            is TorState.Ready -> "Tor mode · connected"
-            is TorState.Starting -> "Tor mode · connecting ${t.progress}%"
-            is TorState.Failed -> "Tor mode · not connected, apps are offline"
-            TorState.Off -> "Tor mode · starting"
+        val apps = if (s.torApps == 1) "1 app" else "${s.torApps} apps"
+        val torText = if (s.torApps == 0) null else when (val t = gatekeeper.tor.state.value) {
+            is TorState.Ready -> "Tor · $apps connected"
+            is TorState.Starting -> "Tor · connecting ${t.progress}%"
+            is TorState.Failed -> "Tor · not connected, $apps offline"
+            TorState.Off -> "Tor · starting"
         }
         Notifications.notify(
             this, Notifications.ID_STATUS,
@@ -579,18 +627,32 @@ class GatekeeperVpnService : VpnService() {
         val alwaysOn: Boolean = false,
         /** "Block connections without VPN" is on, which breaks every app we don't tunnel. */
         val lockdown: Boolean = false,
-        /** All traffic is relayed (live monitor or Tor mode); the live view has entries. */
+        /** Live monitor: every app's traffic is relayed and shown. */
         val monitoring: Boolean = false,
-        /** The tunnel is in Tor mode. */
-        val torMode: Boolean = false,
-    )
+        /** The forwarding engine runs (live monitor, Tor apps or tracker blocking). */
+        val relaying: Boolean = false,
+        /** Apps currently routed through Tor (Tor mode on). */
+        val torApps: Int = 0,
+        /** Apps with tracker blocking on. */
+        val trackerApps: Int = 0,
+    ) {
+        /** Tor is in use by at least one app. */
+        val torMode: Boolean get() = torApps > 0
+    }
 
     private data class TunnelPlan(
         val blocked: Set<String>,
         val monitor: Boolean,
-        val tor: Boolean,
+        val torOn: Boolean,
+        /** Apps routed through Tor; empty while Tor mode is off. */
+        val torApps: Set<String>,
+        val trackerApps: Set<String>,
+        val whileOpen: Set<String>,
         val dns: List<InetAddress>,
-    )
+    ) {
+        /** Apps that need the forwarding engine. */
+        val relayed: Set<String> get() = torApps + trackerApps
+    }
 
     companion object {
         private const val TAG = "GatekeeperVpn"
@@ -600,10 +662,6 @@ class GatekeeperVpnService : VpnService() {
         private const val REBUILD_DEBOUNCE_MS = 300L
         private const val LOG_FLUSH_MS = 10_000L
         private const val LOG_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
-        private const val TUN_ADDRESS_V4 = "10.111.222.1"
-        private const val TUN_ADDRESS_V6 = "fd00:1:2:3::1"
-        private const val TUN_DNS_V4 = "10.111.222.2"
-        private const val TUN_DNS_V6 = "fd00:1:2:3::2"
         private const val MONITOR_MTU = 1500
 
         private val _status = MutableStateFlow(Status())

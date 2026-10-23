@@ -4,6 +4,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import app.gatekeeper.data.ConnectionAttempt
+import app.gatekeeper.insights.TrackerDomains
 import app.gatekeeper.tor.TorRoute
 import java.io.IOException
 import java.io.OutputStream
@@ -22,15 +23,20 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.random.Random
 
 /**
- * User-space relay used while the live monitor is on. Every app's packets arrive from the tunnel;
- * for TCP the engine completes the handshake itself and relays the byte stream over a real
- * (protected) socket, for UDP it relays datagrams. Blocked apps' packets are still dropped.
+ * User-space relay for apps in Gatekeeper's tunnel (every app while the live monitor runs; else
+ * only apps that need it). For TCP the engine completes the handshake itself and relays the byte
+ * stream over a real (protected) socket; for UDP it relays datagrams. Per app ([RelayPolicy]):
  *
- * Tor mode ([torMode]): TCP connections are opened through Tor's SOCKS port instead of directly,
- * with the owning app as the SOCKS username so each app gets its own circuits. DNS (UDP 53, to
- * any server) goes to Tor's DNS port; every other UDP datagram is dropped, because Tor carries
- * only TCP. Nothing ever leaves directly: until Tor is ready ([updateTorRoute] with a route),
- * new connections are refused, so the mode fails closed.
+ * - Blocked apps: packets dropped.
+ * - Tor apps: TCP is opened through Tor's SOCKS port, with the app as the SOCKS username so each
+ *   app gets its own circuits. DNS (UDP 53, to any server) goes to Tor's DNS port; every other UDP
+ *   datagram is dropped, because Tor carries only TCP. Nothing of theirs ever leaves directly:
+ *   until Tor is ready ([updateTorRoute] with a route) their connections are refused (fail closed).
+ *   Connections whose owner Android can't name are treated the same way whenever any app uses Tor.
+ * - Tracker-blocking apps: DNS lookups of known tracker servers get NXDOMAIN, and a TCP stream is
+ *   held until its server name (TLS SNI / HTTP Host) is known; a tracker's stream is reset before
+ *   a single byte reaches it.
+ * - Everyone else: relayed directly.
  *
  * Single-threaded: all flow state is touched only on this thread. The tunnel reader hands packets
  * over through [enqueue].
@@ -42,14 +48,12 @@ class ForwardingEngine(
     private val toTunnel: OutputStream,
     /** Which app owns a connection. */
     private val owners: Owners,
-    initialBlocked: Set<String>,
+    initialPolicy: RelayPolicy,
     /** Records attempts by blocked apps (connection log). */
     private val onBlockedPacket: (ByteArray, Int) -> Unit,
     /** Finished connections waiting to be written to the connection log. */
     private val finished: ConcurrentLinkedQueue<ConnectionAttempt>,
-    /** Relay through Tor instead of directly. Fixed for the engine's lifetime. */
-    private val torMode: Boolean = false,
-    /** Tor's ports, or null while Tor is not ready (Tor mode only). */
+    /** Tor's ports, or null while Tor is not ready (only used for [RelayPolicy.tor] apps). */
     initialTorRoute: TorRoute? = null,
     /** Monotonic milliseconds. */
     private val clock: () -> Long = { SystemClock.elapsedRealtime() },
@@ -66,8 +70,8 @@ class ForwardingEngine(
     }
     private val selector: Selector = Selector.open()
     private val inbox = ConcurrentLinkedQueue<ByteArray>()
-    private val pendingBlocked = AtomicReference<Set<String>?>(null)
-    private var blocked: Set<String> = initialBlocked
+    private val pendingPolicy = AtomicReference<RelayPolicy?>(null)
+    private var policy: RelayPolicy = initialPolicy
     private val pendingRoute = AtomicReference<RouteUpdate?>(null)
     private var route: TorRoute? = initialTorRoute
 
@@ -102,8 +106,9 @@ class ForwardingEngine(
         if (wasEmpty) selector.wakeup()
     }
 
-    fun updateBlocked(packages: Set<String>) {
-        pendingBlocked.set(packages)
+    /** New per-app rules. Connections whose treatment changed are reset so apps reconnect. */
+    fun updatePolicy(policy: RelayPolicy) {
+        pendingPolicy.set(policy)
         selector.wakeup()
     }
 
@@ -130,7 +135,7 @@ class ForwardingEngine(
         try {
             while (running) {
                 selector.select(TICK_MS)
-                pendingBlocked.getAndSet(null)?.let { applyBlocked(it) }
+                pendingPolicy.getAndSet(null)?.let { applyPolicy(it) }
                 pendingRoute.getAndSet(null)?.let { applyRoute(it.route) }
 
                 val keys = selector.selectedKeys().iterator()
@@ -184,12 +189,34 @@ class ForwardingEngine(
         val dst = InetAddress.getByAddress(p.dst)
         val uid = owners.uidOf(p.protocol, src, p.srcPort, dst, p.dstPort)
         val packages = owners.packagesOf(uid)
-        val blockedPkg = packages.firstOrNull { it in blocked }
+        val blockedPkg = packages.firstOrNull { it in policy.blocked }
         if (blockedPkg != null) {
             blockedFlows.put(key, blockedPkg)
             return blockedPkg to true
         }
-        return (packages.firstOrNull() ?: if (uid == Process.SYSTEM_UID || uid == 0) "android" else null) to false
+        // Prefer the package the rules are about when several share a UID.
+        val ruled = packages.firstOrNull { it in policy.tor } ?: packages.firstOrNull { it in policy.trackers }
+        return (ruled ?: packages.firstOrNull() ?: if (uid == Process.SYSTEM_UID || uid == 0) "android" else null) to false
+    }
+
+    /**
+     * Whether [owner]'s traffic must go through Tor. A connection Android can't attribute (null
+     * owner) is sent through Tor whenever any app uses Tor: it might be one of them, and failing
+     * closed is the safe side.
+     */
+    private fun viaTor(owner: String?): Boolean =
+        if (owner == null) policy.tor.isNotEmpty() else owner in policy.tor
+
+    private fun filtersTrackers(owner: String?): Boolean = owner != null && owner in policy.trackers
+
+    private fun isTunnelDns(raw: ByteArray) = addr(raw) in TunnelAddresses.dns
+
+    /** Records a refused tracker connection (live view and connection log). */
+    private fun recordTracker(owner: String?, protocol: String, dst: ByteArray, port: Int, host: String?) {
+        val record = newRecord(owner, protocol, dst, port, blocked = true)
+        record.note = "tracker"
+        if (host != null) record.host = host
+        finish(record)
     }
 
     // ---- TCP --------------------------------------------------------------------------------
@@ -216,13 +243,31 @@ class ForwardingEngine(
             onBlockedPacket(raw, raw.size)
             return
         }
-        if (torMode && route == null) {
+        if (isTunnelDns(p.dst)) {
+            // Nothing listens on the tunnel's DNS address over TCP (e.g. Android probing it for
+            // encrypted DNS): refuse at once instead of connecting anywhere.
+            sendRst(p)
+            return
+        }
+        val tor = viaTor(owner)
+        if (tor && route == null) {
             // Tor isn't ready: refuse rather than ever connecting directly.
             sendRst(p)
             return
         }
+        val filter = filtersTrackers(owner)
+        if (filter) {
+            val known = dnsNames.get(addr(p.dst))
+            if (TrackerDomains.categoryOf(known) != null) {
+                // We already know this address belongs to a tracker: don't even connect.
+                recordTracker(owner, "TCP", p.dst, p.dstPort, known)
+                sendRst(p)
+                return
+            }
+        }
         val record = newRecord(owner, "TCP", p.dst, p.dstPort, blocked = false)
-        val flow = TcpFlow(key, p, owner, record, if (torMode) route else null)
+        if (tor) record.via = "Tor"
+        val flow = TcpFlow(key, p, owner, record, if (tor) route else null, filter)
         try {
             flow.start()
             tcpFlows[key] = flow
@@ -246,7 +291,13 @@ class ForwardingEngine(
         val record: Record,
         /** Non-null: connect through Tor's SOCKS port with this identity. */
         private val tor: TorRoute?,
+        /** Hold the app's first bytes until the server name is known; reset trackers. */
+        filterTrackers: Boolean,
     ) {
+        val viaTor get() = tor != null
+
+        /** Data from the app is held (not sent on) until the tracker check has decided. */
+        private var holding = filterTrackers
         private val v6 = syn.v6
         private val app = syn.src
         private val appPort = syn.srcPort
@@ -475,24 +526,47 @@ class ForwardingEngine(
                 return
             }
             val start = p.payloadOffset + skip
+            var tracker = false
             sniff?.let { buffer ->
                 // A TLS ClientHello can span several segments; look at up to SNIFF_LIMIT bytes.
                 buffer.append(p.buf, start, minOf(accept, SNIFF_LIMIT - buffer.size))
-                val host = buffer.copy(0, buffer.size).let { HostSniffer.hostOf(it, 0, it.size) }
+                val seen = buffer.copy(0, buffer.size)
+                val host = HostSniffer.hostOf(seen, 0, seen.size)
                 if (host != null) record.host = host
-                if (host != null || buffer.size >= SNIFF_LIMIT) sniff = null
+                val decided = host != null || buffer.size >= SNIFF_LIMIT || !HostSniffer.mayBeIncomplete(seen, 0, seen.size)
+                if (decided) {
+                    sniff = null
+                    if (holding) {
+                        holding = false
+                        tracker = TrackerDomains.categoryOf(host) != null
+                    }
+                }
             }
             toRemote.addLast(ByteBuffer.wrap(p.buf.copyOfRange(start, start + accept)))
             toRemoteBytes += accept
             appNext = Seq.add(appNext, accept.toLong())
-            record.bytesOut += accept
             touch()
+            if (tracker) {
+                // Reset before anything reaches the tracker; the held bytes are discarded.
+                record.blocked = true
+                record.note = "tracker"
+                close(reset = true)
+                return
+            }
+            record.bytesOut += accept
             flushToRemote()
             send(IpPacket.ACK)
         }
 
+        /** Stops holding (no name came) and sends what was held. */
+        private fun release() {
+            holding = false
+            sniff = null
+            flushToRemote()
+        }
+
         private fun flushToRemote() {
-            if (!connected) return
+            if (!connected || holding) return
             while (toRemote.isNotEmpty()) {
                 val buf = toRemote.first()
                 val written = channel.write(buf)
@@ -586,6 +660,11 @@ class ForwardingEngine(
                 send(IpPacket.FIN or IpPacket.ACK, seq = Seq.add(sndNext, -1))
                 lastAckProgress = now
             }
+            // An app that sent a partial request and then went quiet: stop waiting for a name.
+            if (holding && toRemoteBytes > 0 && now - lastActivity > HOLD_TIMEOUT_MS) {
+                release()
+                send(IpPacket.ACK)
+            }
             maybeSendFin()
             val idle = now - lastActivity
             if (idle > if (appFin || remoteEof) HALF_CLOSED_TIMEOUT_MS else IDLE_TIMEOUT_MS) close(reset = true)
@@ -596,7 +675,7 @@ class ForwardingEngine(
             var ops = 0
             if (!connected) ops = if (socksStage != SOCKS_DONE) SelectionKey.OP_READ else SelectionKey.OP_CONNECT
             else {
-                if (toRemote.isNotEmpty()) ops = ops or SelectionKey.OP_WRITE
+                if (toRemote.isNotEmpty() && !holding) ops = ops or SelectionKey.OP_WRITE
                 if (synAcked && !remoteEof && unacked.size < minOf(appWindow, WINDOW)) ops = ops or SelectionKey.OP_READ
             }
             selectionKey.interestOps(ops)
@@ -636,7 +715,8 @@ class ForwardingEngine(
             onBlockedPacket(raw, raw.size)
             return
         }
-        if (torMode) {
+        val filter = filtersTrackers(owner) && p.dstPort == 53
+        if (viaTor(owner)) {
             val tor = route
             if (p.dstPort != 53) {
                 // Tor carries only TCP. Dropping UDP keeps it from leaking around Tor; QUIC and
@@ -649,7 +729,8 @@ class ForwardingEngine(
             if (tor == null) return // Not ready: no answer, the app retries.
             try {
                 // Any DNS server the app asks is answered by Tor's resolver.
-                val flow = UdpFlow(key, p, owner, newRecord(owner, "DNS", p.dst, p.dstPort, blocked = false), InetSocketAddress(LOOPBACK, tor.dnsPort))
+                val record = newRecord(owner, "DNS", p.dst, p.dstPort, blocked = false).apply { via = "Tor" }
+                val flow = UdpFlow(key, p, owner, record, InetSocketAddress(LOOPBACK, tor.dnsPort), viaTor = true, filterTrackers = filter)
                 udpFlows[key] = flow
                 flow.send(p)
             } catch (e: IOException) {
@@ -667,11 +748,20 @@ class ForwardingEngine(
             }
             return
         }
+        val target = if (isTunnelDns(p.dst)) {
+            // Lookups sent to the tunnel's own DNS address go to the real network's DNS server.
+            if (p.dstPort != 53) return
+            policy.directDns.firstOrNull() ?: return // No network DNS known: no answer.
+        } else {
+            InetSocketAddress(InetAddress.getByAddress(p.dst), p.dstPort)
+        }
         try {
             val flow = UdpFlow(
                 key, p, owner,
                 newRecord(owner, if (p.dstPort == 53) "DNS" else "UDP", p.dst, p.dstPort, blocked = false),
-                InetSocketAddress(InetAddress.getByAddress(p.dst), p.dstPort),
+                target,
+                viaTor = false,
+                filterTrackers = filter,
             )
             udpFlows[key] = flow
             flow.send(p)
@@ -687,6 +777,9 @@ class ForwardingEngine(
         val record: Record,
         /** Where datagrams really go: the app's server, or Tor's DNS port. Replies still appear to come from the app's server. */
         target: InetSocketAddress,
+        val viaTor: Boolean,
+        /** Answer lookups of tracker servers with NXDOMAIN instead of forwarding them. */
+        private val filterTrackers: Boolean,
     ) {
         private val v6 = first.v6
         private val app = first.src
@@ -706,7 +799,15 @@ class ForwardingEngine(
         }
 
         fun send(p: IpPacket) {
-            if (isDns && record.host == null) record.host = DnsAnswers.question(p.buf, p.payloadOffset, p.payloadLength)
+            val question = if (isDns) DnsAnswers.question(p.buf, p.payloadOffset, p.payloadLength) else null
+            if (isDns && record.host == null) record.host = question
+            if (filterTrackers && TrackerDomains.categoryOf(question) != null) {
+                val answer = DnsAnswers.nxdomain(p.buf, p.payloadOffset, p.payloadLength)
+                if (answer != null) write(IpPacket.udp(v6, remote, app, remotePort, appPort, answer, 0, answer.size))
+                recordTracker(owner, "DNS", remote, remotePort, question)
+                touch()
+                return
+            }
             try {
                 channel.write(ByteBuffer.wrap(p.buf, p.payloadOffset, p.payloadLength))
                 record.bytesOut += p.payloadLength
@@ -768,20 +869,26 @@ class ForwardingEngine(
         udpFlows.values.toList().forEach { it.tick(now) }
     }
 
-    private fun applyBlocked(packages: Set<String>) {
-        blocked = packages
+    private fun applyPolicy(new: RelayPolicy) {
+        policy = new
         blockedFlows.clear()
-        tcpFlows.values.filter { it.owner != null && it.owner in packages }.forEach { it.close(reset = true) }
-        udpFlows.values.filter { it.owner != null && it.owner in packages }.forEach { it.close() }
+        quicFlows.clear()
+        // Reset connections whose treatment changed: newly blocked, or moved onto or off Tor.
+        tcpFlows.values.toList()
+            .filter { (it.owner != null && it.owner in new.blocked) || it.viaTor != viaTor(it.owner) }
+            .forEach { it.close(reset = true) }
+        udpFlows.values.toList()
+            .filter { (it.owner != null && it.owner in new.blocked) || it.viaTor != viaTor(it.owner) }
+            .forEach { it.close() }
     }
 
     private fun applyRoute(newRoute: TorRoute?) {
         if (newRoute == route) return
         route = newRoute
-        // New identity, new ports or Tor gone: drop every connection so apps reconnect on the
-        // new circuits (or are refused while Tor is down).
-        tcpFlows.values.toList().forEach { it.close(reset = true) }
-        udpFlows.values.toList().forEach { it.close() }
+        // New identity, new ports or Tor gone: drop every Tor connection so apps reconnect on the
+        // new circuits (or are refused while Tor is down). Direct apps are unaffected.
+        tcpFlows.values.toList().filter { it.viaTor }.forEach { it.close(reset = true) }
+        udpFlows.values.toList().filter { it.viaTor }.forEach { it.close() }
     }
 
     private class Record(
@@ -791,9 +898,13 @@ class ForwardingEngine(
         val protocol: String,
         val address: String,
         val port: Int,
-        val blocked: Boolean,
+        var blocked: Boolean,
     ) {
         var host: String? = null
+        /** "Tor" when relayed through Tor. */
+        var via: String? = null
+        /** Why it was blocked beyond the app's rule, e.g. "tracker". */
+        var note: String? = null
         var lastMillis = startMillis
         var bytesOut = 0L
         var bytesIn = 0L
@@ -830,7 +941,7 @@ class ForwardingEngine(
                 address = record.address,
                 port = record.port,
                 domain = record.host,
-                allowed = true,
+                allowed = !record.blocked,
                 bytes = record.bytesIn + record.bytesOut,
             ),
         )
@@ -855,6 +966,8 @@ class ForwardingEngine(
                     bytesIn = r.bytesIn,
                     open = r.open && running,
                     blocked = r.blocked,
+                    via = r.via,
+                    note = r.note,
                 )
             },
         )
@@ -878,6 +991,7 @@ class ForwardingEngine(
         const val MAX_INBOX = 10_000
         const val MAX_RECORDS = 500
         const val SNIFF_LIMIT = 4096
+        const val HOLD_TIMEOUT_MS = 3_000L
 
         const val SOCKS_DONE = 0
         const val SOCKS_METHOD = 1

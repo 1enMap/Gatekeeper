@@ -3,10 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        Used ONLY by two features the user turns on by hand:
-        - the live monitor, which relays other apps' traffic so their connections can be shown;
-        - Tor mode (experimental), which runs Tor inside Gatekeeper and relays other apps'
-          traffic through the Tor network.
+        Used ONLY by features the user turns on by hand, all of which relay other apps' traffic:
+        - the live monitor, so every app's connections can be shown;
+        - Tor mode (experimental), which runs Tor inside Gatekeeper and relays the apps the user
+          picked through the Tor network;
+        - tracker blocking, which relays the apps the user picked so tracker connections can be
+          refused.
         Gatekeeper never opens connections of its own (no analytics, no updates, no servers of
         ours) and in normal mode it relays nothing at all.
     -->

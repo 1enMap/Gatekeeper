@@ -48,7 +48,20 @@ class ForwardingEngineTest {
         }
     }
 
-    private fun start(blocked: Set<String> = emptySet(), torMode: Boolean = false, route: TorRoute? = null): ForwardingEngine {
+    /**
+     * [torMode] = the app under test ("com.test.app") goes through Tor, as in the original
+     * all-apps Tor mode. [owner] maps an app's source port to its package (null = Android can't
+     * tell); by default every connection belongs to "com.test.app".
+     */
+    private fun start(
+        blocked: Set<String> = emptySet(),
+        torMode: Boolean = false,
+        route: TorRoute? = null,
+        tor: Set<String> = if (torMode) setOf("com.test.app") else emptySet(),
+        trackers: Set<String> = emptySet(),
+        directDns: List<java.net.InetSocketAddress> = emptyList(),
+        owner: (Int) -> String? = { "com.test.app" },
+    ): ForwardingEngine {
         val e = ForwardingEngine(
             protector = object : ForwardingEngine.Protector {
                 override fun protect(socket: Socket) = true
@@ -56,13 +69,13 @@ class ForwardingEngineTest {
             },
             toTunnel = sink,
             owners = object : ForwardingEngine.Owners {
-                override fun uidOf(protocol: Int, src: InetAddress, srcPort: Int, dst: InetAddress, dstPort: Int) = 10123
-                override fun packagesOf(uid: Int) = arrayOf("com.test.app")
+                // The source port stands in for the UID, so tests can give each "app" its own port.
+                override fun uidOf(protocol: Int, src: InetAddress, srcPort: Int, dst: InetAddress, dstPort: Int) = srcPort
+                override fun packagesOf(uid: Int) = owner(uid)?.let { arrayOf(it) } ?: emptyArray()
             },
-            initialBlocked = blocked,
+            initialPolicy = RelayPolicy(blocked = blocked, tor = tor, trackers = trackers, directDns = directDns),
             onBlockedPacket = { _, _ -> blockedPackets.incrementAndGet() },
             finished = ConcurrentLinkedQueue<ConnectionAttempt>(),
-            torMode = torMode,
             initialTorRoute = route,
             clock = { System.nanoTime() / 1_000_000 },
         )
@@ -480,5 +493,249 @@ class ForwardingEngineTest {
         send(e, tcp(app4, remote4, 41003, 443, 1, 0, IpPacket.SYN, mss = 1460))
         assertNull(fromEngine.poll(500, TimeUnit.MILLISECONDS))
         assertEquals(1, blockedPackets.get())
+    }
+
+    // ---- Per-app routing and tracker blocking ----
+
+    private val tunnelDns4 = byteArrayOf(10, 111, 222.toByte(), 2)
+
+    /** Handshake only; returns (our next seq, next expected seq from the engine). */
+    private fun connect(e: ForwardingEngine, sport: Int, dst: ByteArray, dport: Int): Pair<Long, Long> {
+        send(e, tcp(app4, dst, sport, dport, 1, 0, IpPacket.SYN, mss = 1460))
+        val synAck = next()
+        assertTrue("SYN-ACK", synAck.isSyn && synAck.isAck)
+        val rcvNext = Seq.add(synAck.seq, 1)
+        send(e, tcp(app4, dst, sport, dport, 2, rcvNext, IpPacket.ACK))
+        return 2L to rcvNext
+    }
+
+    /** A server that counts every byte it receives until the client goes away; [reply] is sent once, after the first read. */
+    private fun countingServer(received: AtomicInteger, reply: ByteArray? = null): ServerSocket {
+        val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        thread(isDaemon = true) {
+            runCatching {
+                server.accept().use { s ->
+                    val buf = ByteArray(8192)
+                    var replied = false
+                    while (true) {
+                        val n = s.getInputStream().read(buf)
+                        if (n < 0) break
+                        received.addAndGet(n)
+                        if (reply != null && !replied) {
+                            s.getOutputStream().write(reply)
+                            replied = true
+                        }
+                    }
+                }
+            }
+        }
+        return server
+    }
+
+    private fun dnsQuery(id: Int, name: String): ByteArray {
+        val q = ByteArrayOutputStream()
+        q.write(byteArrayOf((id shr 8).toByte(), id.toByte(), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0))
+        name.split('.').forEach { q.write(it.length); q.write(it.toByteArray()) }
+        q.write(byteArrayOf(0, 0, 1, 0, 1))
+        return q.toByteArray()
+    }
+
+    @Test
+    fun torAndDirectAppsShareOneEngine() {
+        val seen = AtomicReference<SocksSeen>()
+        val tor = fakeTor(seen)
+        val direct = server(InetAddress.getByName("127.0.0.1")) { req -> "direct:".toByteArray() + req }
+        val e = start(
+            route = TorRoute(tor.localPort, 1),
+            tor = setOf("com.tor.app"),
+            owner = { port -> if (port == 42000) "com.tor.app" else "com.direct.app" },
+        )
+        assertEquals("BANNER via-tor:a", String(exchange(e, app4, remote4, 443, "a".toByteArray(), 42000)))
+        assertEquals("com.tor.app", seen.get().username)
+        assertEquals("direct:b", String(exchange(e, app4, loop4, direct.localPort, "b".toByteArray(), 42001)))
+    }
+
+    @Test
+    fun unattributedTrafficGoesThroughTorWhenAnyAppDoes() {
+        val direct = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1")).apply { soTimeout = 700 }
+        // Tor is not ready, so the only correct outcome is a refusal; never a direct connection.
+        val e = start(route = null, tor = setOf("com.tor.app"), owner = { null })
+        send(e, tcp(app4, loop4, 42002, direct.localPort, 1, 0, IpPacket.SYN, mss = 1460))
+        assertTrue("refused", next().isRst)
+        assertTrue("nothing reached the direct server", runCatching { direct.accept() }.isFailure)
+    }
+
+    @Test
+    fun unattributedTrafficIsDirectWhenNoAppUsesTor() {
+        val direct = server(InetAddress.getByName("127.0.0.1")) { "ok".toByteArray() }
+        val e = start(owner = { null })
+        assertEquals("ok", String(exchange(e, app4, loop4, direct.localPort, "x".toByteArray(), 42003)))
+    }
+
+    @Test
+    fun movingAnAppOntoTorResetsItsDirectConnections() {
+        val held = AtomicInteger()
+        val server = countingServer(held)
+        val e = start(owner = { "com.app" })
+        connect(e, 42004, loop4, server.localPort)
+        e.updatePolicy(RelayPolicy(tor = setOf("com.app")))
+        val p = next()
+        assertTrue("direct connection reset when the app moves to Tor", p.isRst)
+    }
+
+    @Test
+    fun trackerLookupGetsNxdomainAndNeverLeaves() {
+        val upstream = DatagramSocket(0, InetAddress.getByName("127.0.0.1")).apply { soTimeout = 500 }
+        val e = start(
+            trackers = setOf("com.test.app"),
+            directDns = listOf(java.net.InetSocketAddress("127.0.0.1", upstream.localPort)),
+        )
+        val query = dnsQuery(0x1234, "app-measurement.com")
+        send(e, IpPacket.udp(false, app4, tunnelDns4, 5560, 53, query, 0, query.size))
+        val reply = next()
+        assertArrayEquals("answer comes from the address the app asked", tunnelDns4, reply.src)
+        val dns = reply.buf.copyOfRange(reply.payloadOffset, reply.payloadOffset + reply.payloadLength)
+        assertEquals(0x12, dns[0].toInt()); assertEquals(0x34, dns[1].toInt())
+        assertEquals("NXDOMAIN", 3, dns[3].toInt() and 0x0F)
+        assertTrue("response flag", dns[2].toInt() and 0x80 != 0)
+        assertTrue("tracker lookup never sent upstream", runCatching { upstream.receive(DatagramPacket(ByteArray(512), 512)) }.isFailure)
+    }
+
+    @Test
+    fun ordinaryLookupGoesToNetworkDns() {
+        val upstream = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        thread(isDaemon = true) {
+            val buf = ByteArray(512)
+            val p = DatagramPacket(buf, buf.size)
+            upstream.receive(p)
+            upstream.send(DatagramPacket("answer".toByteArray(), 6, p.socketAddress))
+        }
+        val e = start(
+            trackers = setOf("com.test.app"),
+            directDns = listOf(java.net.InetSocketAddress("127.0.0.1", upstream.localPort)),
+        )
+        val query = dnsQuery(7, "example.org")
+        send(e, IpPacket.udp(false, app4, tunnelDns4, 5561, 53, query, 0, query.size))
+        val reply = next()
+        assertArrayEquals(tunnelDns4, reply.src)
+        assertEquals("answer", String(reply.buf, reply.payloadOffset, reply.payloadLength))
+    }
+
+    @Test
+    fun lookupWithoutNetworkDnsGetsNoAnswer() {
+        val e = start(trackers = setOf("com.test.app"), directDns = emptyList())
+        val query = dnsQuery(8, "example.org")
+        send(e, IpPacket.udp(false, app4, tunnelDns4, 5562, 53, query, 0, query.size))
+        assertNull(fromEngine.poll(500, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun trackerConnectionIsResetBeforeAnyByteLeaves() {
+        val received = AtomicInteger()
+        val server = countingServer(received)
+        val e = start(trackers = setOf("com.test.app"))
+        val (seq, ack) = connect(e, 42005, loop4, server.localPort)
+        send(e, tcp(app4, loop4, 42005, server.localPort, seq, ack, IpPacket.ACK or IpPacket.PSH, clientHello("graph.facebook.com")))
+        var p = next()
+        while (!p.isRst) p = next() // An ACK may come first.
+        Thread.sleep(300)
+        assertEquals("the tracker received nothing", 0, received.get())
+    }
+
+    @Test
+    fun trackerNameInALaterSegmentIsStillCaught() {
+        val received = AtomicInteger()
+        val server = countingServer(received)
+        val e = start(trackers = setOf("com.test.app"))
+        val (seq, ack) = connect(e, 42006, loop4, server.localPort)
+        val hello = clientHello("app-measurement.com", padding = 2500) // Name lands past byte 1400.
+        send(e, tcp(app4, loop4, 42006, server.localPort, seq, ack, IpPacket.ACK, hello.copyOfRange(0, 1400)))
+        val first = next()
+        assertTrue("first part acknowledged, not reset", first.isAck && !first.isRst)
+        Thread.sleep(200)
+        assertEquals("held, not forwarded", 0, received.get())
+        send(e, tcp(app4, loop4, 42006, server.localPort, seq + 1400, ack, IpPacket.ACK or IpPacket.PSH, hello.copyOfRange(1400, hello.size)))
+        var p = next()
+        while (!p.isRst) p = next()
+        Thread.sleep(300)
+        assertEquals("the tracker received nothing", 0, received.get())
+    }
+
+    @Test
+    fun ordinaryHelloIsHeldThenForwardedWhole() {
+        val received = AtomicInteger()
+        val server = countingServer(received, reply = "ok".toByteArray())
+        val e = start(trackers = setOf("com.test.app"))
+        val (seq, ack) = connect(e, 42007, loop4, server.localPort)
+        val hello = clientHello("example.org", padding = 2500)
+        send(e, tcp(app4, loop4, 42007, server.localPort, seq, ack, IpPacket.ACK, hello.copyOfRange(0, 1400)))
+        next()
+        send(e, tcp(app4, loop4, 42007, server.localPort, seq + 1400, ack, IpPacket.ACK or IpPacket.PSH, hello.copyOfRange(1400, hello.size)))
+        var p = next()
+        while (p.payloadLength == 0) {
+            assertTrue("not reset", !p.isRst)
+            p = next()
+        }
+        assertEquals("ok", String(p.buf, p.payloadOffset, p.payloadLength))
+        // The server answers after its first read; the rest of the hello may still be in flight.
+        val deadline = System.currentTimeMillis() + 3000
+        while (received.get() < hello.size && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertEquals("whole hello forwarded", hello.size, received.get())
+    }
+
+    @Test
+    fun knownTrackerAddressIsRefusedWithoutConnecting() {
+        // A lookup through the engine teaches it that 127.0.0.1 is a tracker's address...
+        val upstream = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        thread(isDaemon = true) {
+            val buf = ByteArray(512)
+            val p = DatagramPacket(buf, buf.size)
+            upstream.receive(p)
+            val answer = dnsAnswer(buf.copyOf(p.length), byteArrayOf(127, 0, 0, 1))
+            upstream.send(DatagramPacket(answer, answer.size, p.socketAddress))
+        }
+        val direct = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1")).apply { soTimeout = 700 }
+        // ...by an app that does NOT block trackers, so the lookup itself is answered normally.
+        val e = start(
+            trackers = setOf("com.tracked.app"),
+            directDns = listOf(java.net.InetSocketAddress("127.0.0.1", upstream.localPort)),
+            owner = { port -> if (port == 5563) "com.other.app" else "com.tracked.app" },
+        )
+        val query = dnsQuery(9, "doubleclick.net")
+        send(e, IpPacket.udp(false, app4, tunnelDns4, 5563, 53, query, 0, query.size))
+        next()
+        // The tracking app then connects straight to that address: refused, never connected.
+        send(e, tcp(app4, loop4, 42008, direct.localPort, 1, 0, IpPacket.SYN, mss = 1460))
+        assertTrue(next().isRst)
+        assertTrue("never connected", runCatching { direct.accept() }.isFailure)
+    }
+
+    /** A DNS response with one A record for the question in [query]. */
+    private fun dnsAnswer(query: ByteArray, address: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(query, 0, 2)
+        out.write(byteArrayOf(0x81.toByte(), 0x80.toByte(), 0, 1, 0, 1, 0, 0, 0, 0))
+        out.write(query, 12, query.size - 12)
+        out.write(byteArrayOf(0xC0.toByte(), 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4))
+        out.write(address)
+        return out.toByteArray()
+    }
+
+    @Test
+    fun requestCompletenessIsJudgedCorrectly() {
+        val hello = clientHello("example.org", padding = 2500)
+        assertTrue(HostSniffer.mayBeIncomplete(hello, 0, 1400))
+        assertTrue(!HostSniffer.mayBeIncomplete(hello, 0, hello.size))
+        val get = "GET / HTTP/1.1\r\nHost: a.b\r\n\r\n".toByteArray()
+        assertTrue(HostSniffer.mayBeIncomplete(get, 0, 10))
+        assertTrue(!HostSniffer.mayBeIncomplete(get, 0, get.size))
+        assertTrue("other protocols are decided at once", !HostSniffer.mayBeIncomplete(byteArrayOf(0x53, 0x53, 0x48), 0, 3))
+    }
+
+    @Test
+    fun tcpToTheTunnelDnsAddressIsRefused() {
+        val e = start(owner = { "com.test.app" })
+        send(e, tcp(app4, tunnelDns4, 42009, 853, 1, 0, IpPacket.SYN, mss = 1460))
+        assertTrue(next().isRst)
     }
 }

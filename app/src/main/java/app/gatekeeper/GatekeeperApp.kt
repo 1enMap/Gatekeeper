@@ -4,6 +4,7 @@ import android.app.Application
 import app.gatekeeper.data.AppDatabase
 import app.gatekeeper.data.ConnectionDao
 import app.gatekeeper.data.Mode
+import app.gatekeeper.data.Route
 import app.gatekeeper.data.RuleRepository
 import app.gatekeeper.data.Settings
 import app.gatekeeper.engine.FirewallEngine
@@ -55,6 +56,27 @@ class GatekeeperApp : Application() {
 
     fun setGrace(packageName: String, seconds: Int) {
         appScope.launch(Dispatchers.IO) { rules.setGrace(packageName, seconds, Mode.ALLOWED) }
+    }
+
+    fun setRoute(packageName: String, route: Route) {
+        appScope.launch {
+            val grace = settings.current().defaultGraceSeconds
+            withContext(Dispatchers.IO) { rules.setRoute(packageName, route, grace) }
+        }
+    }
+
+    fun setBlockTrackers(packageName: String, block: Boolean) {
+        appScope.launch {
+            val grace = settings.current().defaultGraceSeconds
+            withContext(Dispatchers.IO) { rules.setBlockTrackers(packageName, block, grace) }
+        }
+    }
+
+    fun setBlockTrackers(packageNames: Collection<String>, block: Boolean) {
+        appScope.launch {
+            val grace = settings.current().defaultGraceSeconds
+            withContext(Dispatchers.IO) { rules.setBlockTrackers(packageNames, block, grace) }
+        }
     }
 
     fun removeRule(packageName: String) {

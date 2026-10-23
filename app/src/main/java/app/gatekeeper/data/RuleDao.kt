@@ -17,6 +17,12 @@ interface RuleDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(rule: AppRule)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rules: List<AppRule>)
+
+    @Query("SELECT * FROM rules WHERE packageName IN (:packageNames)")
+    suspend fun getAll(packageNames: Collection<String>): List<AppRule>
+
     @Query("DELETE FROM rules WHERE packageName = :packageName")
     suspend fun delete(packageName: String)
 

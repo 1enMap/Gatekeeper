@@ -37,9 +37,10 @@ fun AboutScreen(onBack: () -> Unit) {
                 Text("Privacy", style = MaterialTheme.typography.titleMedium)
                 Bullet(
                     "Gatekeeper never contacts any server of its own. It uses the Internet permission only " +
-                        "while you run the Live monitor, to relay other apps' traffic so you can see it.",
+                        "to relay other apps' traffic: while you run the Live monitor, for apps you send " +
+                        "through Tor, and for apps with tracker blocking.",
                 )
-                Bullet("The Live monitor reads server names and byte counts, never message or page content.")
+                Bullet("Relaying reads server names and byte counts only, never message or page content.")
                 Bullet("No analytics, no crash reporting, no ads.")
                 Bullet("Your rules stay on this device and are excluded from backups.")
                 Bullet("The accessibility service only sees the package name of the app on screen, never its content.")

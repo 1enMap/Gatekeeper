@@ -12,6 +12,10 @@ object TrackerDomains {
             "ironsrc.mobi", "supersonicads.com", "inmobi.com", "chartboost.com", "vungle.com",
             "adcolony.com", "startappservice.com", "mopub.com", "pangle.io", "ads.tiktok.com",
             "admob.com", "media.net", "taboola.com", "outbrain.com", "criteo.com", "criteo.net",
+            "amazon-adsystem.com", "adnxs.com", "adsrvr.org", "rubiconproject.com", "pubmatic.com",
+            "openx.net", "moatads.com", "doubleverify.com", "liftoff.io", "mintegral.com",
+            "ads.linkedin.com", "ads-twitter.com", "ads.yahoo.com", "bat.bing.com", "smaato.net",
+            "yandexadexchange.net", "adform.net", "demdex.net",
         ).forEach { put(it, "Advertising") }
         listOf(
             "google-analytics.com", "app-measurement.com", "firebaselogging-pa.googleapis.com",
@@ -21,10 +25,16 @@ object TrackerDomains {
             "onesignal.com", "moengage.com", "clevertap-prod.com", "wzrkt.com", "webengage.com",
             "analytics.tiktok.com", "scorecardresearch.com", "hotjar.com", "braze.com",
             "appmetrica.yandex.net", "newrelic.com", "nr-data.net",
+            "firebaselogging.googleapis.com", "omtrdc.net", "adobedtm.com", "2o7.net", "everesttech.net",
+            "clarity.ms", "quantserve.com", "chartbeat.com", "comscore.com", "mparticle.com",
+            "leanplum.com", "localytics.com", "apptimize.com", "smartlook.com", "uxcam.com",
+            "in.appcenter.ms", "pixel.facebook.com", "analytics.twitter.com", "analytics.google.com",
+            "heapanalytics.com", "fullstory.com", "inspectlet.com", "mouseflow.com", "contentsquare.net",
         ).forEach { put(it, "Analytics / tracking") }
         listOf(
             "crashlytics.com", "firebase-settings.crashlytics.com", "sentry.io", "bugsnag.com",
             "instabug.com", "raygun.io",
+            "embrace.io", "rollbar.com",
         ).forEach { put(it, "Crash reporting") }
     }
 

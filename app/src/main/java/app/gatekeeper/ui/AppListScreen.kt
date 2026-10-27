@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -40,10 +41,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.R
 import app.gatekeeper.data.Mode
+import app.gatekeeper.ui.theme.Gk
 import app.gatekeeper.data.Route
 
 @Composable
-fun AppListScreen(viewModel: MainViewModel, onBack: () -> Unit, onOpen: (String) -> Unit, onLive: (String) -> Unit) {
+fun AppListScreen(viewModel: MainViewModel, onBack: (() -> Unit)?, onOpen: (String) -> Unit, onLive: (String) -> Unit) {
     val rows by viewModel.rows.collectAsStateWithLifecycle()
     val filters by viewModel.filters.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
@@ -136,7 +138,12 @@ private fun AppRowItem(row: AppRow, onOpen: (String) -> Unit, onMode: (String, M
             }
         }
         IconButton(onClick = { onLive(pkg) }) {
-            Icon(painterResource(R.drawable.ic_info), contentDescription = "Live activity")
+            Icon(
+                painterResource(R.drawable.ic_activity),
+                contentDescription = "Live activity",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
         }
         ModeDropdown(row.mode) { onMode(pkg, it) }
     }
@@ -166,8 +173,8 @@ private fun ModeDropdown(mode: Mode, onSelect: (Mode) -> Unit) {
 }
 
 private val Mode.color: Color
-    get() = when (this) {
-        Mode.ALLOWED -> Color(0xFF2E7D32)
-        Mode.BLOCKED -> Color(0xFFC62828)
-        Mode.WHILE_OPEN -> Color(0xFFEF6C00)
+    @Composable get() = when (this) {
+        Mode.ALLOWED -> Gk.status.good
+        Mode.BLOCKED -> Gk.status.danger
+        Mode.WHILE_OPEN -> Gk.status.warn
     }

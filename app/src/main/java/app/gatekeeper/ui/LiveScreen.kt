@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.gatekeeper.data.Mode
+import app.gatekeeper.ui.theme.Gk
 import app.gatekeeper.insights.TrackerDomains
 import app.gatekeeper.monitor.LiveEntry
 import app.gatekeeper.monitor.LiveMonitor
@@ -89,7 +90,7 @@ fun LiveScreen(
                                         else -> "Monitor is off"
                                     },
                                     style = MaterialTheme.typography.titleMedium,
-                                    color = if (status.monitoring) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
+                                    color = if (status.monitoring) Gk.status.good else MaterialTheme.colorScheme.onSurface,
                                 )
                             }
                             if (status.monitoring || requested) {
@@ -201,7 +202,7 @@ private fun AppSummaryRow(s: AppSummary, insights: InsightsViewModel, onClick: (
                 )
             }
         }
-        if (s.open > 0) Pill("live", Color(0xFF2E7D32))
+        if (s.open > 0) Pill("live", Gk.status.good)
     }
 }
 
@@ -245,9 +246,9 @@ private fun LiveRow(
             Spacer(Modifier.width(6.dp))
             when {
                 entry.note == "tracker" -> Pill("tracker blocked", TrackerColor)
-                entry.blocked -> Pill("blocked", Color(0xFFC62828))
+                entry.blocked -> Pill("blocked", Gk.status.danger)
                 entry.protocol == "QUIC" -> Pill("QUIC→TCP", Color.Gray)
-                entry.open -> Pill("open", Color(0xFF2E7D32))
+                entry.open -> Pill("open", Gk.status.good)
             }
             if (entry.via == "Tor") {
                 Spacer(Modifier.width(4.dp))

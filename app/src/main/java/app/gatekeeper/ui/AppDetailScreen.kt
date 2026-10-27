@@ -13,6 +13,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,7 +33,8 @@ import androidx.compose.material3.Switch
 import app.gatekeeper.insights.Risk
 import app.gatekeeper.insights.TrackerDomains
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
+import app.gatekeeper.ui.theme.Gk
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
@@ -83,7 +86,7 @@ fun AppDetailScreen(
                 }
             }
 
-            Button(onClick = onLive, modifier = Modifier.fillMaxWidth()) {
+            FilledTonalButton(onClick = onLive, modifier = Modifier.fillMaxWidth()) {
                 Text("Live activity: see where it connects")
             }
 
@@ -114,6 +117,11 @@ fun AppDetailScreen(
                     onValueChangeFinished = { viewModel.setGrace(packageName, grace.toInt()) },
                     valueRange = 0f..AppRule.MAX_GRACE_SECONDS.toFloat(),
                     steps = AppRule.MAX_GRACE_SECONDS / 5 - 1,
+                    // 5-second steps, but without a row of tick dots.
+                    colors = SliderDefaults.colors(
+                        activeTickColor = Color.Transparent,
+                        inactiveTickColor = Color.Transparent,
+                    ),
                     enabled = row.mode == Mode.WHILE_OPEN,
                 )
                 Text(
@@ -223,11 +231,10 @@ private fun PrivacyRoutingCard(viewModel: MainViewModel, row: AppRow) {
             StatusLine(ok = false, warn = true, text = "Tor mode is off on the home screen, so this app goes direct for now")
         }
         if (payment) {
-            StatusLine(
-                ok = row.route != Route.TOR,
-                warn = true,
-                text = "Looks like a payment or banking app. These expect an Indian connection and usually " +
+            AlertRow(
+                "Looks like a payment or banking app. These expect an Indian connection and usually " +
                     "fail or lock you out over Tor. Keep it direct.",
+                if (row.route == Route.TOR) Gk.status.danger else Gk.status.warn,
             )
         }
         if (whatsapp && row.route == Route.TOR) {

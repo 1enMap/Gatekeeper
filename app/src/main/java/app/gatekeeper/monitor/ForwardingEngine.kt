@@ -134,7 +134,10 @@ class ForwardingEngine(
     override fun run() {
         try {
             while (running) {
-                selector.select(TICK_MS)
+                // With no connections there are no timers to run: sleep until a packet, a rule
+                // change or shutdown wakes the selector, instead of waking 10 times a second.
+                val idle = tcpFlows.isEmpty() && udpFlows.isEmpty() && !dirty && inbox.isEmpty()
+                selector.select(if (idle) 0L else TICK_MS)
                 pendingPolicy.getAndSet(null)?.let { applyPolicy(it) }
                 pendingRoute.getAndSet(null)?.let { applyRoute(it.route) }
 

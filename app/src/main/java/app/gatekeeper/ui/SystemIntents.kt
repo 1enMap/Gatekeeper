@@ -38,6 +38,27 @@ object SystemIntents {
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()),
     )
 
+    /** Android 12+: Settings → Privacy, where the camera and microphone access switches are. */
+    fun openPrivacySettings(context: Context) = launchFirst(
+        context,
+        Intent(Settings.ACTION_PRIVACY_SETTINGS),
+        Intent(Settings.ACTION_SECURITY_SETTINGS),
+        Intent(Settings.ACTION_SETTINGS),
+    )
+
+    /** Android's own Privacy dashboard (which app used camera, mic or location, and when). */
+    fun openPrivacyDashboard(context: Context) = launchFirst(
+        context,
+        Intent("android.intent.action.REVIEW_PERMISSION_USAGE"),
+        Intent(Settings.ACTION_PRIVACY_SETTINGS),
+    )
+
+    fun openLocationSettings(context: Context) = launchFirst(
+        context,
+        Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS),
+        Intent(Settings.ACTION_SETTINGS),
+    )
+
     fun openAppDetailsFor(context: Context, packageName: String) = launchFirst(
         context,
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$packageName".toUri()),

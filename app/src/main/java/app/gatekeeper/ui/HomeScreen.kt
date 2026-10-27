@@ -1,27 +1,30 @@
 package app.gatekeeper.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -30,16 +33,20 @@ import app.gatekeeper.data.Mode
 import app.gatekeeper.data.Route
 import app.gatekeeper.insights.Risk
 import app.gatekeeper.tor.TorState
-import app.gatekeeper.vpn.GatekeeperVpnService
+import app.gatekeeper.ui.theme.Gk
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/** One line of the protection score: what counts, whether it's done, and how to fix it. */
+private class ScoreItem(val points: Int, val earned: Int, val label: String, val fix: String?, val onFix: () -> Unit)
 
 @Composable
 fun HomeScreen(
     viewModel: MainViewModel,
     insights: InsightsViewModel,
     navigate: (Screen) -> Unit,
+    onTab: (Tab) -> Unit,
     onToggleFirewall: (Boolean) -> Unit,
     onToggleTor: (Boolean) -> Unit,
 ) {
@@ -49,281 +56,221 @@ fun HomeScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val accessibilityRunning by viewModel.accessibilityRunning.collectAsStateWithLifecycle()
     val rows by viewModel.allRows.collectAsStateWithLifecycle()
-    val activity by viewModel.activity.collectAsStateWithLifecycle()
+    val audit by insights.audit.collectAsStateWithLifecycle()
+    val log by insights.connections.collectAsStateWithLifecycle()
+    val sensorEvents by insights.sensorEvents.collectAsStateWithLifecycle()
+    val cameraNow by insights.cameraInUse.collectAsStateWithLifecycle()
+    val micNow by insights.micInUse.collectAsStateWithLifecycle()
+    val tor by viewModel.torState.collectAsStateWithLifecycle()
+    var showScore by rememberSaveable { mutableStateOf(false) }
 
+    val myApps = rows.orEmpty().filter { !it.app.isSystem }
     val blockedRules = rows?.count { it.mode == Mode.BLOCKED } ?: 0
     val whileOpenRules = rows?.count { it.mode == Mode.WHILE_OPEN } ?: 0
-    val accessibilityOn = accessibilityRunning || checks.accessibilityEnabled
-    val fallbackOn = settings?.usageStatsFallback == true && checks.usageAccess
+    val trackerApps = myApps.count { it.blockTrackers }
+    val torApps = rows?.count { it.route == Route.TOR } ?: 0
+    val highRisk = audit?.count { !it.isSystem && it.risk == Risk.HIGH } ?: 0
+    val mediumRisk = audit?.count { !it.isSystem && it.risk == Risk.MEDIUM } ?: 0
+    val suspiciousSensors = sensorEvents.count { it.suspicious }
+    val detectionOn = accessibilityRunning || checks.accessibilityEnabled ||
+        (settings?.usageStatsFallback == true && checks.usageAccess)
 
-    Scaffold(
-        topBar = {
-            GatekeeperTopBar("Gatekeeper", actions = {
-                IconAction(R.drawable.ic_settings, "Settings") { navigate(Screen.Settings) }
-                IconAction(R.drawable.ic_info, "About") { navigate(Screen.About) }
-            })
+    val items = listOf(
+        ScoreItem(30, if (status.running) 30 else 0, "Firewall on", "Turn on") { onToggleFirewall(true) },
+        ScoreItem(20, (20 - 10 * highRisk).coerceAtLeast(0), "No apps that need a look", "Review") { navigate(Screen.Audit) },
+        ScoreItem(15, if (suspiciousSensors == 0) 15 else 0, "No camera or mic use with the screen off", "See when") { onTab(Tab.PRIVACY) },
+        ScoreItem(10, if (detectionOn) 10 else 0, "Detects the open app (for While open)", "Set up") { navigate(Screen.Onboarding) },
+        ScoreItem(10, if (checks.batteryUnrestricted) 10 else 0, "Not restricted by battery saver", "Fix") {
+            SystemIntents.requestIgnoreBatteryOptimizations(context)
         },
-    ) { padding ->
+        ScoreItem(
+            10,
+            when {
+                myApps.isNotEmpty() && trackerApps * 2 >= myApps.size -> 10
+                trackerApps > 0 -> 5
+                else -> 0
+            },
+            "Trackers blocked in your apps", "Turn on",
+        ) { navigate(Screen.Settings) },
+        ScoreItem(5, if (checks.notificationsAllowed) 5 else 0, "Notifications allowed (for alerts)", "Allow") {
+            SystemIntents.openNotificationSettings(context)
+        },
+    )
+    val score = items.sumOf { it.earned }
+
+    Scaffold(topBar = { GatekeeperTopBar("Gatekeeper") }) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SectionCard(
-                container = if (status.running) MaterialTheme.colorScheme.primaryContainer
-                else MaterialTheme.colorScheme.surfaceContainer,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Firewall", style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            if (status.running) "On" else "Off",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+            // ---- Hero: score + master switch ----
+            Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surfaceContainer) {
+                Column(
+                    Modifier
+                        .background(Brush.linearGradient(listOf(Gk.status.heroStart, Gk.status.heroEnd)))
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ScoreRing(if (status.running) score else 0, label = "protection")
+                        Spacer(Modifier.width(18.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                when {
+                                    !status.running -> "Protection is off"
+                                    score >= 85 -> "Well protected"
+                                    score >= 60 -> "Protected, with gaps"
+                                    else -> "Needs attention"
+                                },
+                                style = MaterialTheme.typography.headlineSmall,
+                            )
+                            Text(
+                                if (status.running) {
+                                    "${status.blockedCount} blocked now · $blockedRules always · $whileOpenRules while open"
+                                } else {
+                                    "Apps use the internet freely until you turn the firewall on."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            TextButton(onClick = { showScore = !showScore }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                                Text(if (showScore) "Hide details" else "How is this scored?")
+                            }
+                        }
                     }
-                    Switch(checked = status.running, onCheckedChange = onToggleFirewall)
+                    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)) {
+                        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconBadge(R.drawable.ic_shield, if (status.running) Gk.status.good else MaterialTheme.colorScheme.onSurfaceVariant, 36.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("Firewall", style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    if (status.running) "On" else "Off",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (status.running) Gk.status.good else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(checked = status.running, onCheckedChange = onToggleFirewall)
+                        }
+                    }
+                    if (showScore) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items.forEach { item ->
+                                val done = item.earned == item.points
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        if (done) "✓" else "○",
+                                        color = if (done) Gk.status.good else Gk.status.warn,
+                                        modifier = Modifier.width(22.dp),
+                                    )
+                                    Text(item.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                    Text(
+                                        "${item.earned}/${item.points}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    if (!done && item.fix != null) {
+                                        TextButton(onClick = item.onFix) { Text(item.fix) }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            SectionCard {
-                Text("Status", style = MaterialTheme.typography.titleMedium)
-                StatusLine(
-                    ok = status.running,
-                    text = when {
-                        !status.running -> "VPN off"
-                        status.tunnelUp -> "VPN on"
-                        else -> "VPN on (idle, nothing to block right now)"
-                    },
-                )
-                StatusLine(
-                    ok = true,
-                    text = "${status.blockedCount} apps blocked right now " +
-                        "($blockedRules always, $whileOpenRules while open)",
-                )
-                StatusLine(
-                    ok = accessibilityOn,
-                    warn = !accessibilityOn && fallbackOn,
-                    text = when {
-                        accessibilityOn -> "Accessibility on (instant foreground detection)"
-                        fallbackOn -> "Accessibility off, using Usage Access (slower)"
-                        else -> "Foreground detection off: \"While open\" apps never get internet"
-                    },
-                )
-                if (status.running) {
-                    StatusLine(
-                        ok = status.alwaysOn,
-                        warn = !status.alwaysOn,
-                        text = if (status.alwaysOn) "Always-on VPN enabled" else "Always-on VPN not enabled (recommended)",
-                    )
-                }
-                if (status.lockdown) {
-                    StatusLine(
-                        ok = false,
-                        text = "\"Block connections without VPN\" is on. This cuts off every app Gatekeeper " +
-                            "is not blocking. Turn it off in VPN settings.",
-                    )
-                    OutlinedButton(onClick = { SystemIntents.openVpnSettings(context) }) { Text("Open VPN settings") }
-                }
-                if (!checks.batteryUnrestricted) {
-                    StatusLine(ok = false, warn = true, text = "Battery optimisation is on; the system may stop the firewall")
+            // ---- Things that need attention ----
+            if (status.lockdown) {
+                AlertRow(
+                    "\"Block connections without VPN\" is on: it cuts off every app Gatekeeper isn't relaying.",
+                    Gk.status.danger, action = "Fix",
+                ) { SystemIntents.openVpnSettings(context) }
+            }
+            if (status.running && !detectionOn) {
+                AlertRow("Open-app detection is off, so \"While open\" apps never get internet.", Gk.status.warn, action = "Set up") {
+                    navigate(Screen.Onboarding)
                 }
             }
-
-            Button(onClick = { navigate(Screen.Apps) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Manage apps")
+            if (suspiciousSensors > 0) {
+                AlertRow(
+                    "Camera or microphone used with the screen off or no app open ($suspiciousSensors× this week).",
+                    Gk.status.danger, icon = R.drawable.ic_privacy, action = "See",
+                ) { onTab(Tab.PRIVACY) }
             }
 
-            OutlinedButton(onClick = { navigate(Screen.Live(null)) }, modifier = Modifier.fillMaxWidth()) {
-                Text(
+            // ---- Tiles ----
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatTile(
+                    R.drawable.ic_block, "Blocked", "${log?.totalLast24h ?: 0}",
+                    "connection attempts stopped in 24 h",
+                    Gk.status.danger, Modifier.weight(1f),
+                ) { navigate(Screen.Connections) }
+                StatTile(
+                    R.drawable.ic_tracker, "Trackers",
+                    if (trackerApps == 0) "Off" else "$trackerApps apps",
+                    log?.trackersLast24h?.takeIf { it > 0 }?.let { "$it tracker attempts in 24 h" } ?: "blocking ad & analytics servers",
+                    Gk.status.tracker, Modifier.weight(1f),
+                ) { navigate(Screen.Settings) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatTile(
+                    R.drawable.ic_bug, "Threats",
                     when {
-                        status.torMode -> "● Live view of traffic through Tor"
-                        status.monitoring -> "● Live monitor is on: view"
-                        else -> "Live monitor: see where apps connect"
+                        audit == null -> "…"
+                        highRisk > 0 -> "$highRisk to check"
+                        else -> "None"
                     },
-                )
+                    if (mediumRisk > 0) "$mediumRisk more worth a look" else "apps with risky powers",
+                    if (highRisk > 0) Gk.status.danger else Gk.status.good, Modifier.weight(1f),
+                ) { navigate(Screen.Audit) }
+                StatTile(
+                    R.drawable.ic_camera, "Camera & mic",
+                    when {
+                        cameraNow && micNow -> "Both in use"
+                        cameraNow -> "Camera on"
+                        micNow -> "Mic on"
+                        else -> "Idle"
+                    },
+                    sensorEvents.firstOrNull()?.let {
+                        val t = SimpleDateFormat("EEE HH:mm", Locale.getDefault()).format(Date(it.startMillis))
+                        "last used $t"
+                    } ?: "nothing recorded this week",
+                    if (cameraNow || micNow) Gk.status.warn else MaterialTheme.colorScheme.secondary, Modifier.weight(1f),
+                ) { onTab(Tab.PRIVACY) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatTile(
+                    R.drawable.ic_globe, "Tor",
+                    when {
+                        settings?.torMode != true -> "Off"
+                        torApps == 0 -> "No apps"
+                        tor is TorState.Ready -> "Connected"
+                        tor is TorState.Failed -> "Failed"
+                        else -> "Connecting"
+                    },
+                    if (torApps > 0) "$torApps ${if (torApps == 1) "app" else "apps"} through Tor" else "hide your IP from chosen apps' servers",
+                    Gk.status.tor, Modifier.weight(1f),
+                ) { /* The Tor card below has the controls. */ }
+                StatTile(
+                    R.drawable.ic_activity, "Live",
+                    if (status.monitoring) "Watching" else "Off",
+                    "see where apps connect",
+                    MaterialTheme.colorScheme.primary, Modifier.weight(1f),
+                ) { navigate(Screen.Live(null)) }
             }
 
             TorCard(
                 viewModel, status,
                 torModeOn = settings?.torMode == true,
-                torAppCount = rows?.count { it.route == Route.TOR } ?: 0,
+                torAppCount = torApps,
                 onToggleTor = onToggleTor,
-                onChooseApps = { navigate(Screen.Apps) },
+                onChooseApps = { onTab(Tab.APPS) },
             )
-
-            PrivacyCheckupCard(insights, navigate)
-            OutlinedButton(onClick = { navigate(Screen.Onboarding) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Setup guide")
-            }
-
-            SectionCard {
-                Text("Recent activity", style = MaterialTheme.typography.titleMedium)
-                if (activity.isEmpty()) {
-                    Text(
-                        "Nothing yet. Opening and leaving \"While open\" apps will show up here.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                val labels = rows?.associate { it.app.packageName to it.app.label }.orEmpty()
-                val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
-                activity.forEach { entry ->
-                    val who = entry.packageName?.let { labels[it] ?: it }
-                    Row {
-                        Text(
-                            timeFormat.format(Date(entry.timeMillis)),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.width(64.dp),
-                        )
-                        Text(
-                            if (who != null) "$who · ${entry.message}" else entry.message,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PrivacyCheckupCard(insights: InsightsViewModel, navigate: (Screen) -> Unit) {
-    val context = LocalContext.current
-    val audit by insights.audit.collectAsStateWithLifecycle()
-    val top by insights.topBackground.collectAsStateWithLifecycle()
-    val usage by insights.usage.collectAsStateWithLifecycle()
-    val log by insights.connections.collectAsStateWithLifecycle()
-
-    SectionCard {
-        Text("Privacy checkup", style = MaterialTheme.typography.titleMedium)
-        val apps = audit?.filter { !it.isSystem }
-        if (apps == null) {
-            Text("Checking your apps…", style = MaterialTheme.typography.bodyMedium)
-        } else {
-            val high = apps.count { it.risk == Risk.HIGH }
-            val medium = apps.count { it.risk == Risk.MEDIUM }
-            StatusLine(
-                ok = high == 0,
-                text = if (high == 0) "No apps need urgent attention" else "$high ${if (high == 1) "app needs" else "apps need"} a look",
-            )
-            if (medium > 0) StatusLine(ok = false, warn = true, text = "$medium worth checking")
-        }
-        when {
-            usage == UsageState.NeedsPermission ->
-                StatusLine(ok = false, warn = true, text = "Grant Usage Access to see which apps use data in the background")
-            top != null -> top?.let {
-                StatusLine(
-                    ok = true,
-                    text = "Most background data this week: ${it.label} (${formatBytes(context, it.row.background)})",
-                )
-            }
-        }
-        log?.let {
-            val trackers = if (it.trackersLast24h > 0) ", ${it.trackersLast24h} to trackers" else ""
-            StatusLine(ok = true, text = "Blocked apps tried ${it.totalLast24h} connections in 24 h$trackers")
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { navigate(Screen.Audit) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                Text("Audit", maxLines = 1)
-            }
-            OutlinedButton(onClick = { navigate(Screen.Usage) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                Text("Data use", maxLines = 1)
-            }
-            OutlinedButton(onClick = { navigate(Screen.Connections) }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
-                Text("Log", maxLines = 1)
-            }
-        }
-    }
-}
-
-@Composable
-private fun TorCard(
-    viewModel: MainViewModel,
-    status: GatekeeperVpnService.Status,
-    torModeOn: Boolean,
-    torAppCount: Int,
-    onToggleTor: (Boolean) -> Unit,
-    onChooseApps: () -> Unit,
-) {
-    val context = LocalContext.current
-    val tor by viewModel.torState.collectAsStateWithLifecycle()
-
-    SectionCard(
-        container = if (torModeOn && tor is TorState.Ready) MaterialTheme.colorScheme.tertiaryContainer
-        else MaterialTheme.colorScheme.surfaceContainer,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Tor mode", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Experimental",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            Switch(checked = torModeOn, onCheckedChange = onToggleTor)
-        }
-
-        when {
-            !torModeOn -> Text(
-                "Sends the apps you choose through the Tor network, each app on its own circuit, so the " +
-                    "servers they talk to don't see your IP address. Other apps stay direct.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            torAppCount == 0 -> {
-                StatusLine(ok = false, warn = true, text = "No apps chosen yet. Open an app and turn on \"Through Tor\".")
-                OutlinedButton(onClick = onChooseApps) { Text("Choose apps") }
-            }
-            !status.running -> StatusLine(ok = false, warn = true, text = "Starts when the firewall is on")
-            else -> when (val t = tor) {
-                is TorState.Ready -> {
-                    StatusLine(
-                        ok = true,
-                        text = "Connected. ${if (torAppCount == 1) "1 app goes" else "$torAppCount apps go"} through Tor; " +
-                            "all others are direct.",
-                    )
-                    OutlinedButton(onClick = { viewModel.newTorIdentity() }, modifier = Modifier.fillMaxWidth()) {
-                        Text("New identity (fresh circuits)")
-                    }
-                }
-                is TorState.Starting -> {
-                    StatusLine(
-                        ok = false, warn = true,
-                        text = "Connecting to Tor… ${t.progress}%" + if (t.summary.isNotBlank()) " · ${t.summary}" else "",
-                    )
-                    LinearProgressIndicator(progress = { t.progress / 100f }, modifier = Modifier.fillMaxWidth())
-                    Text(
-                        "Tor apps are offline until Tor connects; none of their traffic goes out without Tor.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                is TorState.Failed -> {
-                    StatusLine(ok = false, text = t.message)
-                    Text(
-                        "Tor apps stay offline rather than leak. Retry, or turn Tor mode off to send them direct.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedButton(onClick = { viewModel.retryTor() }) { Text("Retry") }
-                }
-                TorState.Off -> StatusLine(ok = false, warn = true, text = "Starting Tor…")
-            }
-        }
-
-        if (torModeOn) {
-            Text(
-                "Know the limits: Tor hides your IP, not your identity. If you log in, the site knows " +
-                    "it's you. It's slower, some sites block Tor, and voice/video calls, games and other " +
-                    "UDP apps won't work. Devices on your Wi-Fi (printers, casting) can't be reached.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "While the phone boots, before Gatekeeper starts, Tor apps can go online directly for a " +
-                    "few seconds. Payment and banking apps break over Tor: keep them direct.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            VerticalGap(8.dp)
         }
     }
 }

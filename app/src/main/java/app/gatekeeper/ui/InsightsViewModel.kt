@@ -5,6 +5,8 @@ import android.net.ConnectivityManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.gatekeeper.data.ConnectionAttempt
+import app.gatekeeper.data.SensorEvent
+import android.location.LocationManager
 import app.gatekeeper.data.InstalledApps
 import app.gatekeeper.foreground.UsageStatsPoller
 import app.gatekeeper.gatekeeper
@@ -115,12 +117,32 @@ class InsightsViewModel(application: Application) : AndroidViewModel(application
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** Camera and microphone use over the last 7 days, newest first. */
+    val sensorEvents: StateFlow<List<SensorEvent>> = since
+        .flatMapLatest { app.sensorEvents.observeSince(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val cameraInUse: StateFlow<Boolean> = app.sensors.cameraInUse
+    val micInUse: StateFlow<Boolean> = app.sensors.micInUse
+
+    private val _locationOn = MutableStateFlow(true)
+    /** The phone's main location switch (readable by any app). */
+    val locationOn: StateFlow<Boolean> = _locationOn.asStateFlow()
+
+    val sensorAlerts: StateFlow<Boolean> = app.settings.state.map { it.sensorAlerts }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    fun setSensorAlerts(enabled: Boolean) = viewModelScope.launch { app.settings.setSensorAlerts(enabled) }
+    fun clearSensorHistory() = viewModelScope.launch(Dispatchers.IO) { app.sensorEvents.clear() }
+
     private var refreshJob: Job? = null
     private var lastRefresh = 0L
 
     /** Re-reads data usage and re-runs the audit. Cheap enough to call on every resume. */
     fun refresh() {
         since.value = System.currentTimeMillis() - LOG_WINDOW_MS
+        _locationOn.value = runCatching {
+            getApplication<Application>().getSystemService(LocationManager::class.java).isLocationEnabled
+        }.getOrDefault(true)
         _privateDnsStrict.value = runCatching {
             val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java)
             val lp = cm.getLinkProperties(cm.activeNetwork)

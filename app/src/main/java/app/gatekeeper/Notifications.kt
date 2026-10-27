@@ -19,9 +19,12 @@ object Notifications {
     const val CHANNEL_STATUS = "status"
     const val CHANNEL_ALERTS = "alerts"
     const val CHANNEL_NEW_APPS = "new_apps"
+    const val CHANNEL_PRIVACY = "privacy_alerts"
 
     const val ID_STATUS = 1
     const val ID_STOPPED = 2
+    const val ID_SENSOR_CAMERA = 3
+    const val ID_SENSOR_MIC = 4
 
     fun createChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -33,6 +36,9 @@ object Notifications {
                 },
                 NotificationChannel(CHANNEL_ALERTS, "Firewall stopped", NotificationManager.IMPORTANCE_HIGH).apply {
                     description = "Shown when the firewall is turned off by the system or another VPN"
+                },
+                NotificationChannel(CHANNEL_PRIVACY, "Camera & mic alerts", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Camera or microphone used while the screen was off or no app was open"
                 },
                 NotificationChannel(CHANNEL_NEW_APPS, "New apps", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "Choose internet access for newly installed apps"
@@ -82,6 +88,29 @@ object Notifications {
             .setAutoCancel(true)
             .build()
         notify(context, ID_STOPPED, n)
+    }
+
+    /** Camera or mic switched on while the screen was off or no app was open. */
+    fun showSensorAlert(context: Context, camera: Boolean, detail: String) {
+        val what = if (camera) "camera" else "microphone"
+        val n = NotificationCompat.Builder(context, CHANNEL_PRIVACY)
+            .setSmallIcon(R.drawable.ic_shield)
+            .setContentTitle("Your $what was just used")
+            .setContentText(detail)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context, 10,
+                    Intent(context, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .putExtra(MainActivity.EXTRA_OPEN_TAB, "privacy"),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                ),
+            )
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .build()
+        notify(context, if (camera) ID_SENSOR_CAMERA else ID_SENSOR_MIC, n)
     }
 
     fun cancelStopped(context: Context) = NotificationManagerCompat.from(context).cancel(ID_STOPPED)

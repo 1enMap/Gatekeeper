@@ -56,6 +56,12 @@ android {
     testOptions {
         // android.util.Log etc. return defaults in JVM tests instead of throwing.
         unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Screenshot tests only write images when asked: ./gradlew testDebugUnitTest -Pscreenshots
+            it.systemProperty("roborazzi.test.record", project.hasProperty("screenshots").toString())
+            it.systemProperty("robolectric.pixelCopyRenderMode", "hardware")
+        }
     }
 
     // No dependency metadata blob: nothing about this build is sent anywhere.
@@ -96,4 +102,11 @@ dependencies {
     implementation(libs.jtorctl)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
+    // Screenshot tests of the UI on the JVM (test-only; nothing here ships in the app).
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

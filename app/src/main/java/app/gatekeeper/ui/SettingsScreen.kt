@@ -9,9 +9,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,10 +28,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.gatekeeper.R
 import app.gatekeeper.data.AppRule
 
 @Composable
-fun SettingsScreen(viewModel: MainViewModel, insights: InsightsViewModel, onBack: () -> Unit, onRunSetup: () -> Unit) {
+fun SettingsScreen(
+    viewModel: MainViewModel,
+    insights: InsightsViewModel,
+    onBack: (() -> Unit)?,
+    onRunSetup: () -> Unit,
+    onAbout: () -> Unit = {},
+) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val checks by viewModel.checks.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -60,6 +71,11 @@ fun SettingsScreen(viewModel: MainViewModel, insights: InsightsViewModel, onBack
                     onValueChangeFinished = { viewModel.setDefaultGrace(grace.toInt()) },
                     valueRange = 0f..AppRule.MAX_GRACE_SECONDS.toFloat(),
                     steps = AppRule.MAX_GRACE_SECONDS / 5 - 1,
+                    // 5-second steps, but without a row of tick dots.
+                    colors = SliderDefaults.colors(
+                        activeTickColor = Color.Transparent,
+                        inactiveTickColor = Color.Transparent,
+                    ),
                 )
                 Text("Used for apps you set to \"While open\" from now on.", style = MaterialTheme.typography.bodySmall)
             }
@@ -99,7 +115,10 @@ fun SettingsScreen(viewModel: MainViewModel, insights: InsightsViewModel, onBack
                 OutlinedButton(onClick = { insights.clearLog() }) { Text("Clear connection log") }
             }
 
-            OutlinedButton(onClick = onRunSetup, modifier = Modifier.fillMaxWidth()) { Text("Run setup guide again") }
+            SectionCard {
+                NavRow(R.drawable.ic_check, "Setup guide", "VPN, open-app detection, battery and Vivo steps") { onRunSetup() }
+                NavRow(R.drawable.ic_info, "About & help", "How Gatekeeper works, privacy and limits") { onAbout() }
+            }
         }
     }
 }
@@ -113,23 +132,19 @@ private fun TrackerBlockingCard(viewModel: MainViewModel) {
     SectionCard {
         Text("Tracker blocking", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Stops apps from reaching known ad, analytics and crash-reporting servers while the apps " +
-                "themselves keep working. Turn it on per app (Apps → app → Block trackers) or for all " +
-                "your apps here. The tracker list is built into Gatekeeper and updated with the app; " +
-                "nothing is downloaded.",
+            "Stops apps reaching known ad, analytics and crash-reporting servers; the apps keep working. " +
+                "Uses a little more battery. If an app misbehaves, turn it off for that app.",
             style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text("On in $blocking of ${mine.size} apps", style = MaterialTheme.typography.bodyMedium)
-        Text(
-            "Apps with tracker blocking pass through Gatekeeper's relay, which uses a little more battery. " +
-                "If an app misbehaves, turn it off for that app.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { viewModel.setBlockTrackersForMyApps(true) }, enabled = blocking < mine.size) {
-                Text("Block in all my apps")
-            }
-            OutlinedButton(onClick = { viewModel.setBlockTrackersForMyApps(false) }, enabled = blocking > 0) {
+        Text("On in $blocking of ${mine.size} apps", style = MaterialTheme.typography.titleSmall)
+        Button(
+            onClick = { viewModel.setBlockTrackersForMyApps(true) },
+            enabled = blocking < mine.size,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Block trackers in all my apps") }
+        if (blocking > 0) {
+            TextButton(onClick = { viewModel.setBlockTrackersForMyApps(false) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Turn off everywhere")
             }
         }

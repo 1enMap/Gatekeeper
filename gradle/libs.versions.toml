@@ -10,6 +10,8 @@ room = "2.8.4"
 datastore = "1.1.7"
 coroutines = "1.10.2"
 junit = "4.13.2"
+robolectric = "4.17"
+roborazzi = "1.77.0"
 torAndroid = "0.4.9.14"
 jtorctl = "0.4.5.7"
 
@@ -31,6 +33,11 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
+androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 tor-android = { group = "info.guardianproject", name = "tor-android", version.ref = "torAndroid" }
 jtorctl = { group = "info.guardianproject", name = "jtorctl", version.ref = "jtorctl" }
 

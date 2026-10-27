@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.gatekeeper.R
 import app.gatekeeper.data.Mode
+import app.gatekeeper.ui.theme.Gk
 
 val Mode.label: String
     get() = when (this) {
@@ -86,6 +87,7 @@ fun SectionCard(
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(containerColor = container),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
@@ -96,8 +98,8 @@ fun SectionCard(
 @Composable
 fun StatusLine(ok: Boolean, text: String, warn: Boolean = false) {
     val color = when {
-        ok -> Color(0xFF2E7D32)
-        warn -> Color(0xFFE65100)
+        ok -> Gk.status.good
+        warn -> Gk.status.warn
         else -> MaterialTheme.colorScheme.error
     }
     Row(verticalAlignment = Alignment.CenterVertically) {

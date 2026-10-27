@@ -52,6 +52,26 @@ Stack: Kotlin, Jetpack Compose (Material 3) in a single activity, Room for rules
    - **Switching to Gatekeeper** counts as leaving the current app (Gatekeeper is not ignored as a foreground app, so checking its status doesn't keep a While open app online).
    - **Screen off:** turning the screen off counts as leaving the app and starts its grace timer. A wake lock, held for at most the grace period, makes sure the timer fires on time. Unlocking the phone restores the app you were in.
 
+## The app at a glance
+
+A bottom bar with five tabs:
+- **Home:** a protection score (0–100, with a one-tap fix for every missing point), the firewall switch, alerts, status tiles (blocked connections, trackers, threats, camera & mic, Tor, live monitor) and the Tor controls.
+- **Apps:** every app's internet mode, Tor and tracker badges, and a live-activity button.
+- **Privacy:** camera, microphone and location status and switches, the camera & microphone timeline, and who can access what.
+- **Activity:** the live monitor, connection log, data usage, security audit and recent events.
+- **Settings.**
+
+The look is Gatekeeper's own fixed theme, "Night watch": deep ink surfaces, a mint "protected" accent, amber for things worth a look, coral for problems and violet for Tor, with a matching light theme.
+
+## Privacy tab (camera, microphone, location)
+
+- **Switches.** Android only lets the system turn camera, microphone or location off for every app, so each tile opens the exact system switch. The quickest route is the *Camera access* and *Microphone access* Quick Settings tiles.
+- **Camera & microphone timeline (sensor watch).** Gatekeeper notes every time the camera or microphone switches on and off. Android doesn't tell ordinary apps *which* app is using them, so each entry records the app that was on screen at the time.
+  - **Alerts:** use while the screen is off, or with no app open, is flagged and (optionally) announced with a notification. Face unlock on the lock screen isn't flagged.
+  - **No permissions:** Gatekeeper holds no camera, microphone or location permission. It only listens to Android's "camera available" and "recording started" signals.
+  - **Storage:** history is kept on the phone for 30 days.
+- **Who can access.** For camera, microphone, location (including "Always"), contacts, SMS and call logs: which of your apps have access, and whether they can go online. Tap one to change it in Android's settings.
+
 ## Privacy checkup (security audit, data usage, connection log)
 
 The home screen's **Privacy checkup** card leads to three tools. None of them use the network.
@@ -93,6 +113,8 @@ You can view by app or as a list of connections, filter to open connections or t
 - **Ping (ICMP) doesn't work** while monitoring.
 - **It's on demand and never persisted.** It stops when you tap Stop, when the firewall stops, or after a restart. It costs more battery than normal mode.
 - **It only works when Gatekeeper is the active VPN**, like everything else in the app.
+
+When nothing is being relayed, the forwarder sleeps until a packet or a rule change arrives (no periodic wake-ups), so the relay features cost battery only while apps are actually using them.
 
 The forwarder has JVM tests in `app/src/test/java/app/gatekeeper/monitor/` that drive it with hand-built packets against real local servers:
 - TCP handshake and request/response;
@@ -198,6 +220,14 @@ Before testing WhatsApp, log out linked devices (WhatsApp → Linked devices) or
 - [ ] Start another VPN app: `onRevoke` is handled and a notification is shown.
 - [ ] Leave the phone idle overnight on Vivo: the service is still running in the morning.
 
+## Screenshot tests
+
+`app/src/test/java/app/gatekeeper/ui/ScreenshotTest.kt` renders the main screens on the JVM (Robolectric + Roborazzi, test-only dependencies). Normally it just checks the screens compose without crashing; to write PNGs to `app/build/screenshots/` for design review:
+
+```bash
+./gradlew testDebugUnitTest --tests 'app.gatekeeper.ui.ScreenshotTest' -Pscreenshots
+```
+
 ## Project layout
 
 ```
@@ -209,6 +239,8 @@ app/src/main/java/app/gatekeeper/
   engine/FirewallEngine.kt  Rules + foreground app → blocked set; grace timers
   insights/                 Security audit, data usage, packet header parser, connection observer, tracker list
   monitor/                  Live monitor: TCP/UDP forwarding engine, packet builder, SNI/DNS sniffing
+  privacy/                  Sensor watch: camera and microphone use, with alerts
+  tor/                      Embedded Tor (tor-android) controller
   foreground/               Accessibility service, UsageStats fallback, ignore filter
   vpn/                      VpnService and the packet-dropping drainer thread
   receivers/                Boot, package removed, new-app notification actions

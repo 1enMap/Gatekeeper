@@ -24,6 +24,8 @@ data class SettingsState(
     val onboardingDone: Boolean = false,
     /** Keep a local log of the servers blocked apps try to reach. */
     val recordConnections: Boolean = true,
+    /** Notify when the camera or mic is used while the screen is off or no app is open. */
+    val sensorAlerts: Boolean = true,
     /** Experimental: relay every app's traffic through Tor while the firewall runs. */
     val torMode: Boolean = false,
 )
@@ -39,6 +41,7 @@ class Settings(context: Context) {
             usageStatsFallback = p[USAGE_FALLBACK] ?: false,
             onboardingDone = p[ONBOARDING_DONE] ?: false,
             recordConnections = p[RECORD_CONNECTIONS] ?: true,
+            sensorAlerts = p[SENSOR_ALERTS] ?: true,
             torMode = p[TOR_MODE] ?: false,
         )
     }
@@ -52,6 +55,7 @@ class Settings(context: Context) {
     suspend fun setUsageStatsFallback(value: Boolean) = store.edit { it[USAGE_FALLBACK] = value }
     suspend fun setOnboardingDone(value: Boolean) = store.edit { it[ONBOARDING_DONE] = value }
     suspend fun setRecordConnections(value: Boolean) = store.edit { it[RECORD_CONNECTIONS] = value }
+    suspend fun setSensorAlerts(value: Boolean) = store.edit { it[SENSOR_ALERTS] = value }
     suspend fun setTorMode(value: Boolean) = store.edit { it[TOR_MODE] = value }
 
     private companion object {
@@ -61,6 +65,7 @@ class Settings(context: Context) {
         val USAGE_FALLBACK = booleanPreferencesKey("usage_stats_fallback")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         val RECORD_CONNECTIONS = booleanPreferencesKey("record_connections")
+        val SENSOR_ALERTS = booleanPreferencesKey("sensor_alerts")
         val TOR_MODE = booleanPreferencesKey("tor_mode")
     }
 }

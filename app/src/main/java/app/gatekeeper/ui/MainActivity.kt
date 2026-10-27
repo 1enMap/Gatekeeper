@@ -71,6 +71,8 @@ sealed interface Screen {
     data object Audit : Screen
     data object Usage : Screen
     data object Connections : Screen
+    /** The connection log, filtered to tracker servers. */
+    data object TrackerLog : Screen
     data class Live(val packageName: String?) : Screen
 }
 
@@ -179,6 +181,9 @@ class MainActivity : ComponentActivity() {
                                     Screen.Audit -> AuditScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
                                     Screen.Usage -> UsageScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
                                     Screen.Connections -> ConnectionsScreen(insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) })
+                                    Screen.TrackerLog -> ConnectionsScreen(
+                                        insights, onBack = back, onOpen = { navigate(Screen.Detail(it)) }, trackersFirst = true,
+                                    )
                                     is Screen.Live -> LiveScreen(
                                         viewModel, insights, top.packageName,
                                         onBack = back,

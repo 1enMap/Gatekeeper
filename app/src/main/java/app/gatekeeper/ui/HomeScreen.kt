@@ -1,6 +1,11 @@
 package app.gatekeeper.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,6 +68,9 @@ fun HomeScreen(
     val micNow by insights.micInUse.collectAsStateWithLifecycle()
     val tor by viewModel.torState.collectAsStateWithLifecycle()
     var showScore by rememberSaveable { mutableStateOf(false) }
+    val scroll = rememberScrollState()
+    val torCard = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
 
     val myApps = rows.orEmpty().filter { !it.app.isSystem }
     val blockedRules = rows?.count { it.mode == Mode.BLOCKED } ?: 0
@@ -103,7 +111,7 @@ fun HomeScreen(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -209,12 +217,17 @@ fun HomeScreen(
                     "connection attempts stopped in 24 h",
                     Gk.status.danger, Modifier.weight(1f),
                 ) { navigate(Screen.Connections) }
+                val trackerHits = log?.trackersLast24h ?: 0
                 StatTile(
                     R.drawable.ic_tracker, "Trackers",
-                    if (trackerApps == 0) "Off" else "$trackerApps apps",
-                    log?.trackersLast24h?.takeIf { it > 0 }?.let { "$it tracker attempts in 24 h" } ?: "blocking ad & analytics servers",
+                    if (trackerApps == 0) "Blocking off" else "On in $trackerApps",
+                    when {
+                        trackerHits > 0 -> "$trackerHits tracker connections stopped in 24 h"
+                        trackerApps == 0 -> "tap to see which apps use trackers"
+                        else -> "none tried in the last 24 h"
+                    },
                     Gk.status.tracker, Modifier.weight(1f),
-                ) { navigate(Screen.Settings) }
+                ) { navigate(Screen.TrackerLog) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 StatTile(
@@ -254,7 +267,7 @@ fun HomeScreen(
                     },
                     if (torApps > 0) "$torApps ${if (torApps == 1) "app" else "apps"} through Tor" else "hide your IP from chosen apps' servers",
                     Gk.status.tor, Modifier.weight(1f),
-                ) { /* The Tor card below has the controls. */ }
+                ) { scope.launch { torCard.bringIntoView() } }
                 StatTile(
                     R.drawable.ic_activity, "Live",
                     if (status.monitoring) "Watching" else "Off",
@@ -269,6 +282,8 @@ fun HomeScreen(
                 torAppCount = torApps,
                 onToggleTor = onToggleTor,
                 onChooseApps = { onTab(Tab.APPS) },
+                torAppNames = rows.orEmpty().filter { it.route == Route.TOR }.map { it.app.label }.sorted(),
+                modifier = Modifier.bringIntoViewRequester(torCard),
             )
             VerticalGap(8.dp)
         }

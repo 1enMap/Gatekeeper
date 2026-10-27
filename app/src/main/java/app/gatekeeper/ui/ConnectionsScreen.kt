@@ -39,12 +39,18 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun ConnectionsScreen(insights: InsightsViewModel, onBack: () -> Unit, onOpen: (String) -> Unit) {
+fun ConnectionsScreen(
+    insights: InsightsViewModel,
+    onBack: () -> Unit,
+    onOpen: (String) -> Unit,
+    /** Open with the Trackers filter already on. */
+    trackersFirst: Boolean = false,
+) {
     val log by insights.connections.collectAsStateWithLifecycle()
     val strictDns by insights.privateDnsStrict.collectAsStateWithLifecycle()
     val recording by insights.recording.collectAsStateWithLifecycle()
     var timeline by rememberSaveable { mutableStateOf(false) }
-    var trackersOnly by rememberSaveable { mutableStateOf(false) }
+    var trackersOnly by rememberSaveable { mutableStateOf(trackersFirst) }
     var expanded by rememberSaveable { mutableStateOf<String?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
 

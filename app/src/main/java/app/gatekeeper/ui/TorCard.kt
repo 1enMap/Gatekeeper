@@ -1,5 +1,6 @@
 package app.gatekeeper.ui
 
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -43,11 +44,15 @@ fun TorCard(
     torAppCount: Int,
     onToggleTor: (Boolean) -> Unit,
     onChooseApps: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Names of the apps routed through Tor. */
+    torAppNames: List<String> = emptyList(),
 ) {
     val context = LocalContext.current
     val tor by viewModel.torState.collectAsStateWithLifecycle()
 
     SectionCard(
+        modifier = modifier,
         container = if (torModeOn && tor is TorState.Ready) MaterialTheme.colorScheme.tertiaryContainer
         else MaterialTheme.colorScheme.surfaceContainer,
     ) {
@@ -107,6 +112,17 @@ fun TorCard(
                     OutlinedButton(onClick = { viewModel.retryTor() }) { Text("Retry") }
                 }
                 TorState.Off -> StatusLine(ok = false, warn = true, text = "Starting Tor…")
+            }
+        }
+
+        if (torModeOn && torAppCount > 0) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Through Tor: " + torAppNames.joinToString(", ").ifEmpty { "$torAppCount apps" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onChooseApps) { Text("Change apps") }
             }
         }
 

@@ -260,3 +260,9 @@ app/src/main/java/app/gatekeeper/
 - Separate Wi-Fi and mobile-data rules
 - Schedules
 - Import and export of rules
+
+## License
+
+Gatekeeper is free to use, study, modify and share for **non-commercial purposes** under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Selling it, or using it in a commercial product or service, is not permitted without written permission from the author.
+
+Tor mode bundles [tor-android](https://github.com/guardianproject/tor-android) and [jtorctl](https://github.com/guardianproject/jtorctl) from the Guardian Project, which keep their own BSD licenses.

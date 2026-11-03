@@ -14,6 +14,40 @@ Gatekeeper never contacts any server of its own: no analytics, no crash reportin
 
 It holds the `INTERNET` permission for two features you turn on by hand: the **Live monitor**, which relays other apps' traffic so you can see where it goes, and the experimental **Tor mode**, which relays it through Tor. In normal mode Gatekeeper relays nothing: it only drops the packets of blocked apps.
 
+## Install
+
+Download the APK from the [latest release](https://github.com/1enMap/Gatekeeper/releases/latest) and open it on your phone (Android 10 or newer).
+
+> [!IMPORTANT]
+> **Google Play Protect may warn about or block Gatekeeper, and some phones (such as Vivo / iQOO) ask for extra verification before you can turn on its accessibility service.**
+>
+> This happens because Gatekeeper is installed from outside the Play Store and, like every per-app firewall that works without root, it combines a **VPN** with an **accessibility service**. Malware also abuses accessibility, so Android treats any sideloaded app that requests it as a potential risk, regardless of what the app actually does. The warning is about the *kind* of permission, not a detection of anything harmful in Gatekeeper.
+>
+> - If Play Protect shows **"Unsafe app blocked"**, tap **More details → Install anyway**.
+> - If it blocks the install outright ("this app can request access to sensitive data"), install it from a computer with `adb install Gatekeeper-v1.0.apk`, or build it yourself (see [Building](#building)).
+> - The accessibility service is **optional**. Without it, choose **Use Usage Access instead** during setup; "While open" then reacts within about 1.5 s instead of instantly.
+
+### Why the permissions are safe to grant
+
+Gatekeeper asks for powerful permissions, so here is exactly what it does with them. Every point can be checked in the source code.
+
+- **Accessibility is used for one thing: the name of the app on screen.** The service subscribes only to window-change events and declares `canRetrieveWindowContent="false"` ([`accessibility_service.xml`](app/src/main/res/xml/accessibility_service.xml)), so Android never gives it the text, buttons or anything else on your screen. It never performs taps, gestures or other actions ([`ForegroundAccessibilityService.kt`](app/src/main/java/app/gatekeeper/foreground/ForegroundAccessibilityService.kt)).
+- **The VPN is local.** Nothing is sent to a server. In normal mode, blocked apps' packets are simply discarded on the phone ([`TunnelDrainer.kt`](app/src/main/java/app/gatekeeper/vpn/TunnelDrainer.kt)).
+- **No data leaves your phone.** There are no analytics, crash reporters, ads, accounts, update checks or third-party SDKs. Gatekeeper never opens a connection of its own; `INTERNET` is used only to relay other apps' traffic for features you switch on yourself (Live monitor, Tor, tracker blocking).
+- **No camera, microphone, location, contacts, SMS or storage permissions.** The camera and mic alerts use Android's public "in use" signals, not the sensors themselves.
+- **Rules and logs stay on the device** and are excluded from cloud backup and device transfer.
+- **Every permission is explained** in [Permissions and why each is needed](#permissions-and-why-each-is-needed).
+
+### Verify your download
+
+Release APKs are signed with the author's key. Its SHA-256 certificate fingerprint is:
+
+```
+08:CE:6E:B0:0B:10:04:A7:5C:5A:48:40:C5:D8:1C:6C:4E:3C:58:E8:03:EB:E4:7E:C3:18:AB:8F:2F:BF:42:91
+```
+
+Check it with `apksigner verify --print-certs Gatekeeper-v1.0.apk`, or with any APK inspector app. An APK with a different fingerprint was not built by the author: don't install it. You can also skip the download entirely and build the app from this source code yourself.
+
 ## Building
 
 Requirements: JDK 17 or newer and the Android SDK with platform 37.1 (Android Studio provides both).

@@ -3,5 +3,5 @@
     <string name="app_name">Gatekeeper</string>
     <string name="tile_label">Firewall</string>
     <string name="accessibility_label">Gatekeeper foreground detection</string>
-    <string name="accessibility_description">Detects which app is open so it can be allowed internet. No screen content is read.</string>
+    <string name="accessibility_description">Gatekeeper uses this only to know which app is on screen, so apps set to &quot;While open&quot; get internet while you use them. It cannot read anything on your screen, never performs actions, and nothing leaves your phone.</string>
 </resources>

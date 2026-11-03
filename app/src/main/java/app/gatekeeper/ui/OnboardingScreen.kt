@@ -86,6 +86,13 @@ fun OnboardingScreen(
                             "service only receives the package name of the app in front. It never reads " +
                             "what's on the screen.",
                     )
+                    Text(
+                        "Android, or your phone maker, may show a strong warning or ask you to verify " +
+                            "your identity before turning this on. That happens for every app that uses " +
+                            "accessibility and isn't from the Play Store; it is not a sign of a problem. " +
+                            "You can also skip this and use Usage Access below.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     StatusLine(checks.accessibilityEnabled, if (checks.accessibilityEnabled) "Accessibility service on" else "Accessibility service off")
                     Button(onClick = { SystemIntents.openAccessibilitySettings(context) }, enabled = !checks.accessibilityEnabled) {
                         Text("Open accessibility settings")

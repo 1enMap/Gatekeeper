@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -23,7 +25,7 @@ android {
     // Release key, read from keystore.properties (never committed). Without that file, release
     // builds are signed with the local debug key so they still install for testing.
     val releaseKey = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { file ->
-        java.util.Properties().apply { file.inputStream().use { load(it) } }
+        Properties().apply { file.inputStream().use { load(it) } }
     }
 
     signingConfigs {

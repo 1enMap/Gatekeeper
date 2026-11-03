@@ -50,7 +50,7 @@ Check it with `apksigner verify --print-certs Gatekeeper-v1.0.apk`, or with any 
 
 ## Building
 
-Requirements: JDK 17 or newer and the Android SDK with platform 37.1 (Android Studio provides both).
+Requirements: JDK 17 to 24 (JDK 21 recommended; this Gradle version can't run on newer JDKs) and the Android SDK with platform 37.1 (Android Studio provides both).
 
 ```bash
 ./gradlew assembleDebug
@@ -232,11 +232,11 @@ The home screen lists the latest allow/block decisions with timestamps (for exam
    - If Android says the setting is *restricted* (common for sideloaded APKs on Android 13+), open App info → ⋮ → **Allow restricted settings**, then try again.
    - If you'd rather not use accessibility, choose **Use Usage Access instead**.
 3. **Ignore battery optimisation.**
-4. **Vivo / iQOO steps (Funtouch OS / OriginOS, e.g. Vivo V30 Pro):**
-   - **Autostart:** iManager → App manager → Autostart manager → Gatekeeper **on**.
-   - **Background power:** Settings → Battery → Background power consumption management → Gatekeeper → **Allow high background power consumption**.
-   - **Lock in Recents:** open Recents and pull down on Gatekeeper's card, or tap its lock icon, so it shows a lock.
-   - **Always-on VPN:** Settings → Network & internet (or *Other networks & connections*) → VPN → ⚙ next to Gatekeeper → **Always-on VPN on**.
+4. **Keep it running in the background.** Many Android phones close background apps aggressively to save battery, which would stop the firewall. The exact menu names differ between phones; [dontkillmyapp.com](https://dontkillmyapp.com) has steps for most brands.
+   - **Autostart:** if your phone has an autostart or app launch manager, allow Gatekeeper to start on its own.
+   - **Background power:** in your battery settings, allow Gatekeeper unrestricted or high background power use.
+   - **Lock in Recents:** if your phone supports it, lock Gatekeeper's card in the Recents screen.
+   - **Always-on VPN:** Settings → Network & internet → VPN → ⚙ next to Gatekeeper → **Always-on VPN on**.
    - ⚠️ **Do not** enable **"Block connections without VPN"**. Gatekeeper only tunnels blocked apps, so lockdown mode would cut off every other app. The home screen warns you if it's on.
 
 ## Known limitations
@@ -245,7 +245,7 @@ The home screen lists the latest allow/block decisions with timestamps (for exam
 - Apps in **While open** mode get no notifications and no incoming calls in the background. That is the point, but you should know it.
 - Linked devices, such as WhatsApp Web or Desktop, can still receive messages and show double ticks.
 - Apps that share a Linux UID with other apps are blocked or allowed together. The app detail screen tells you when this applies.
-- **Cloned apps (Vivo App Clone / Dual apps)** run in a separate Android user. Gatekeeper's VPN only covers the main user, so the clone is not blocked. The clone also has the same package name as the original, so opening the clone counts as opening the original and gives the original internet. Don't use a clone to send test messages to the original on the same phone.
+- **Cloned apps (App Clone, Dual apps, Dual Messenger and similar)** run in a separate Android user. Gatekeeper's VPN only covers the main user, so the clone is not blocked. The clone also has the same package name as the original, so opening the clone counts as opening the original and gives the original internet. Don't use a clone to send test messages to the original on the same phone.
 
 ## Test checklist
 
@@ -259,7 +259,7 @@ Before testing WhatsApp, log out linked devices (WhatsApp → Linked devices) or
 - [ ] Reboot: the firewall comes back on with the same rules.
 - [ ] Uninstall an app that has a rule: no crash, and the rule is cleaned up.
 - [ ] Start another VPN app: `onRevoke` is handled and a notification is shown.
-- [ ] Leave the phone idle overnight on Vivo: the service is still running in the morning.
+- [ ] Leave the phone idle overnight: the service is still running in the morning.
 
 ## Screenshot tests
 

@@ -78,7 +78,7 @@ fun ConnectionsScreen(
                             Text("${data.trackersLast24h} of them went to known ad or tracking servers.")
                         }
                         if (data.allowedLast24h > 0) {
-                            Text("Plus ${data.allowedLast24h} connections let through while the live monitor was on.")
+                            Text("Plus ${connectionsLabel(data.allowedLast24h)} let through while the live monitor was on.")
                         }
                         Text(
                             "Every connection a blocked app tries (including \"While open\" apps in the " +

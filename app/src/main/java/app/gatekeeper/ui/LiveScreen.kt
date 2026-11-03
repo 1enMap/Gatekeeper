@@ -131,7 +131,7 @@ fun LiveScreen(
                         }
                     }
                     Text(
-                        "${entries.size} connections · ${entries.count { it.open }} open · " +
+                        "${connectionsLabel(entries.size)} · ${entries.count { it.open }} open · " +
                             "${formatBytes(context, entries.sumOf { it.bytesIn + it.bytesOut })}",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -189,7 +189,7 @@ private fun AppSummaryRow(s: AppSummary, insights: InsightsViewModel, onClick: (
         Column(Modifier.weight(1f)) {
             Text(appName(s.packageName, insights), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                "${s.connections} connections · ${s.open} open · ${formatBytes(context, s.bytes)}",
+                "${connectionsLabel(s.connections)} · ${s.open} open · ${formatBytes(context, s.bytes)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -289,3 +289,6 @@ private fun appName(pkg: String?, insights: InsightsViewModel) = when (pkg) {
     "android" -> "Android system"
     else -> insights.labelOf(pkg)
 }
+
+/** "1 connection", "2 connections". */
+internal fun connectionsLabel(count: Int) = if (count == 1) "1 connection" else "$count connections"

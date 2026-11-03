@@ -87,7 +87,7 @@ fun OnboardingScreen(
                             "what's on the screen.",
                     )
                     Text(
-                        "Android, or your phone maker, may show a strong warning or ask you to verify " +
+                        "Android may show a strong warning or ask you to verify " +
                             "your identity before turning this on. That happens for every app that uses " +
                             "accessibility and isn't from the Play Store; it is not a sign of a problem. " +
                             "You can also skip this and use Usage Access below.",

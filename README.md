@@ -19,7 +19,7 @@ It holds the `INTERNET` permission for two features you turn on by hand: the **L
 Download the APK from the [latest release](https://github.com/1enMap/Gatekeeper/releases/latest) and open it on your phone (Android 10 or newer).
 
 > [!IMPORTANT]
-> **Google Play Protect may warn about or block Gatekeeper, and some phones (such as Vivo / iQOO) ask for extra verification before you can turn on its accessibility service.**
+> **Android may flag Gatekeeper as a potentially risky app.** Google Play Protect may warn about or block the install, and Android may ask for extra confirmation or verification before you can turn on its accessibility service.
 >
 > This happens because Gatekeeper is installed from outside the Play Store and, like every per-app firewall that works without root, it combines a **VPN** with an **accessibility service**. Malware also abuses accessibility, so Android treats any sideloaded app that requests it as a potential risk, regardless of what the app actually does. The warning is about the *kind* of permission, not a detection of anything harmful in Gatekeeper.
 >

@@ -70,6 +70,13 @@ class FirewallEngine(
     /** Last foreground app before the screen went off; restored on unlock. */
     private var foregroundBeforeScreenOff: String? = null
 
+    /**
+     * The app most recently on screen, kept across screen off. Unlike [foreground] it is not
+     * cleared when the screen turns off, so it still names the app the user unlocks back into
+     * before any new window event arrives.
+     */
+    val lastForeground: String? get() = _foreground.value ?: foregroundBeforeScreenOff
+
     private val reblockTimers = HashMap<String, Job>()
 
     private val _activity = MutableStateFlow<List<ActivityEntry>>(emptyList())

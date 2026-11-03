@@ -17,6 +17,7 @@ import app.gatekeeper.data.SensorDao
 import app.gatekeeper.data.SensorEvent
 import app.gatekeeper.data.Settings
 import app.gatekeeper.engine.FirewallEngine
+import app.gatekeeper.foreground.UsageStatsPoller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -100,8 +101,14 @@ class SensorWatch(
         val now = System.currentTimeMillis()
         val screenOn = power.isInteractive
         val locked = keyguard.isKeyguardLocked
-        // The app the user was last in; meaningless once the screen is off.
-        val foreground = if (screenOn) engine.foreground.value?.takeIf { it != homePackage() } else null
+        // The app the user was last in; meaningless once the screen is off. Right after unlocking
+        // back into an app no window event has arrived yet, so fall back to the app last on screen
+        // and then to usage stats, instead of wrongly reporting that no app was open.
+        val foreground = if (!screenOn) null else {
+            val known = engine.foreground.value ?: if (!locked) engine.lastForeground else null
+            (known ?: if (!locked) UsageStatsPoller.recentForeground(context) else null)
+                ?.takeIf { it != homePackage() }
+        }
         // Face unlock uses the camera on the lock screen with the screen on: not flagged. With the
         // screen off, or no app open, nothing the user is looking at explains it.
         val suspicious = !screenOn || (foreground == null && !locked)

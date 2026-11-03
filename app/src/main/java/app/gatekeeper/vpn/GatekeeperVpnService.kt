@@ -1,6 +1,5 @@
 package app.gatekeeper.vpn
 
-import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -566,20 +565,6 @@ class GatekeeperVpnService : VpnService() {
 
     // --- Screen and package events -------------------------------------------------------------
 
-    private val screenReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            val engine = gatekeeper.engine
-            when (intent.action) {
-                Intent.ACTION_SCREEN_OFF -> engine.onScreenOff()
-                Intent.ACTION_USER_PRESENT -> engine.onScreenUnlocked()
-                Intent.ACTION_SCREEN_ON -> {
-                    val keyguard = getSystemService(KeyguardManager::class.java)
-                    if (!keyguard.isKeyguardLocked) engine.onScreenUnlocked()
-                }
-            }
-        }
-    }
-
     private val packageAddedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return // Just an update.
@@ -596,15 +581,7 @@ class GatekeeperVpnService : VpnService() {
 
     private fun registerReceivers() {
         if (receiversRegistered) return
-        ContextCompat.registerReceiver(
-            this, screenReceiver,
-            IntentFilter().apply {
-                addAction(Intent.ACTION_SCREEN_OFF)
-                addAction(Intent.ACTION_SCREEN_ON)
-                addAction(Intent.ACTION_USER_PRESENT)
-            },
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
+        // Screen events are watched by GatekeeperApp for as long as the process runs.
         ContextCompat.registerReceiver(
             this, packageAddedReceiver,
             IntentFilter(Intent.ACTION_PACKAGE_ADDED).apply { addDataScheme("package") },
@@ -615,7 +592,6 @@ class GatekeeperVpnService : VpnService() {
 
     private fun unregisterReceivers() {
         if (!receiversRegistered) return
-        runCatching { unregisterReceiver(screenReceiver) }
         runCatching { unregisterReceiver(packageAddedReceiver) }
         receiversRegistered = false
     }

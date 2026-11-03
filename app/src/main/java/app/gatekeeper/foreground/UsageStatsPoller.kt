@@ -57,6 +57,26 @@ class UsageStatsPoller(private val context: Context) {
 
     companion object {
         const val INTERVAL_MS = 1_500L
+        private const val RECENT_WINDOW_MS = 10 * 60_000L
+
+        /**
+         * The app most recently brought to the screen in the last few minutes, or null without
+         * usage access. A one-off lookup for when no other foreground signal is available.
+         */
+        fun recentForeground(context: Context): String? {
+            if (!hasUsageAccess(context)) return null
+            return runCatching {
+                val end = System.currentTimeMillis()
+                val events = context.getSystemService(UsageStatsManager::class.java).queryEvents(end - RECENT_WINDOW_MS, end)
+                var latest: String? = null
+                val event = UsageEvents.Event()
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event)
+                    if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) latest = event.packageName
+                }
+                latest?.takeIf { !context.gatekeeper.foregroundFilter.isIgnored(it) }
+            }.getOrNull()
+        }
 
         fun hasUsageAccess(context: Context): Boolean {
             val appOps = context.getSystemService(AppOpsManager::class.java)

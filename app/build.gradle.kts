@@ -20,24 +20,26 @@ android {
         versionName = "1.0"
     }
 
+    // Release key, read from keystore.properties (never committed). Without that file, release
+    // builds are signed with the local debug key so they still install for testing.
+    val releaseKey = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { file ->
+        java.util.Properties().apply { file.inputStream().use { load(it) } }
+    }
+
     signingConfigs {
-        // Test key shared by debug and release builds so every APK built from this repo, on any
-        // machine, installs over the previous one without losing rules. Before publishing to a
-        // store, replace it with your own private key and keep that out of the repository.
-        create("test") {
-            storeFile = rootProject.file("keystore/gatekeeper-test.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        if (releaseKey != null) {
+            create("release") {
+                storeFile = rootProject.file(releaseKey.getProperty("storeFile"))
+                storePassword = releaseKey.getProperty("storePassword")
+                keyAlias = releaseKey.getProperty("keyAlias")
+                keyPassword = releaseKey.getProperty("keyPassword")
+            }
         }
     }
 
     buildTypes {
-        debug {
-            signingConfig = signingConfigs.getByName("test")
-        }
         release {
-            signingConfig = signingConfigs.getByName("test")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

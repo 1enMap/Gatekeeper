@@ -8,3 +8,6 @@ build/
 .externalNativeBuild
 .cxx
 .kotlin/
+/keystore.properties
+*.keystore
+*.jks

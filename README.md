@@ -16,7 +16,7 @@ It holds the `INTERNET` permission for two features you turn on by hand: the **L
 
 ## Building
 
-Requirements: JDK 17 or newer and the Android SDK with platform 36 (Android Studio provides both).
+Requirements: JDK 17 or newer and the Android SDK with platform 37.1 (Android Studio provides both).
 
 ```bash
 ./gradlew assembleDebug
@@ -31,7 +31,14 @@ For daily use, install the **release** build: it is minified and much smoother t
 # APK: app/build/outputs/apk/release/app-release.apk
 ```
 
-Both builds are signed with the test key in `keystore/`, so any build from this repo installs over the previous one and keeps your rules. Replace that key with your own private one before publishing anywhere.
+Without further setup, both builds are signed with your machine's Android debug key. To sign release builds with your own key, create `keystore.properties` in the project root (it is git-ignored):
+
+```properties
+storeFile=/path/to/your-release.keystore
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
 
 If you build from the command line without Android Studio, create `local.properties` with `sdk.dir=/path/to/Android/Sdk` or set `ANDROID_HOME`.
 

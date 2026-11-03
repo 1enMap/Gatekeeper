@@ -18,6 +18,7 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.random.Random
@@ -70,6 +71,7 @@ class ForwardingEngine(
     }
     private val selector: Selector = Selector.open()
     private val inbox = ConcurrentLinkedQueue<ByteArray>()
+    private val inboxSize = AtomicInteger(0)
     private val pendingPolicy = AtomicReference<RelayPolicy?>(null)
     private var policy: RelayPolicy = initialPolicy
     private val pendingRoute = AtomicReference<RouteUpdate?>(null)
@@ -100,8 +102,9 @@ class ForwardingEngine(
     // ---- Called from other threads ----------------------------------------------------------
 
     fun enqueue(buf: ByteArray, length: Int) {
-        if (inbox.size > MAX_INBOX) return // Overloaded: drop; TCP will retransmit.
-        val wasEmpty = inbox.isEmpty()
+        // ConcurrentLinkedQueue.size is O(n), so the queue length is counted separately.
+        if (inboxSize.get() >= MAX_INBOX) return // Overloaded: drop; TCP will retransmit.
+        val wasEmpty = inboxSize.getAndIncrement() == 0
         inbox.add(buf.copyOf(length))
         if (wasEmpty) selector.wakeup()
     }
@@ -145,16 +148,32 @@ class ForwardingEngine(
                 while (keys.hasNext()) {
                     val key = keys.next()
                     keys.remove()
-                    when (val flow = key.attachment()) {
-                        is TcpFlow -> flow.onReady(key)
-                        is UdpFlow -> flow.onReadable()
+                    val flow = key.attachment()
+                    // One misbehaving connection must never stop the engine: that would cut off
+                    // every app in the tunnel until the next rebuild.
+                    try {
+                        when (flow) {
+                            is TcpFlow -> flow.onReady(key)
+                            is UdpFlow -> flow.onReadable()
+                        }
+                    } catch (e: RuntimeException) {
+                        Log.w(TAG, "Connection failed unexpectedly", e)
+                        when (flow) {
+                            is TcpFlow -> runCatching { flow.close(reset = true) }
+                            is UdpFlow -> runCatching { flow.close() }
+                        }
                     }
                 }
 
                 var handled = 0
                 while (handled < 512) {
                     val packet = inbox.poll() ?: break
-                    handlePacket(packet)
+                    inboxSize.decrementAndGet()
+                    try {
+                        handlePacket(packet)
+                    } catch (e: RuntimeException) {
+                        Log.w(TAG, "Dropped a packet that could not be handled", e)
+                    }
                     handled++
                 }
                 if (inbox.isNotEmpty()) selector.wakeup()
@@ -795,10 +814,16 @@ class ForwardingEngine(
         private val isDns = remotePort == 53
 
         init {
-            channel.configureBlocking(false)
-            protector.protect(channel.socket())
-            channel.connect(target)
-            selectionKey = channel.register(selector, SelectionKey.OP_READ, this)
+            try {
+                channel.configureBlocking(false)
+                protector.protect(channel.socket())
+                channel.connect(target)
+                selectionKey = channel.register(selector, SelectionKey.OP_READ, this)
+            } catch (e: Exception) {
+                // Don't leak the socket when the flow can't be set up.
+                runCatching { channel.close() }
+                throw e
+            }
         }
 
         fun send(p: IpPacket) {

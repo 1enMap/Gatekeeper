@@ -103,7 +103,8 @@ class GatekeeperVpnService : VpnService() {
         TrafficObserver(this, gatekeeper.connections) { appliedPackages }
     }
     private var receiversRegistered = false
-    private var stopping = false
+    /** Read on the tunnel thread as well as the main thread. */
+    @Volatile private var stopping = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {

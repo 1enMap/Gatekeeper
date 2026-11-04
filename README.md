@@ -1,6 +1,36 @@
-# Gatekeeper: a per-app firewall for Android
+<p align="center">
+  <img src="docs/icon.svg" width="140" alt="Gatekeeper icon">
+</p>
 
-Gatekeeper controls internet access for each app without root. Every installed app can be set to one of three modes:
+<h1 align="center">Gatekeeper</h1>
+
+<h3 align="center">A firewall for every app on your Android phone</h3>
+
+<p align="center">
+  <a href="https://github.com/1enMap/Gatekeeper/releases/latest"><img src="https://img.shields.io/github/v/release/1enMap/Gatekeeper?label=release&color=4BE3A6" alt="Latest release"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue" alt="License: PolyForm Noncommercial"></a>
+  <img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white" alt="Android 10+">
+  <img src="https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin, Jetpack Compose">
+  <img src="https://img.shields.io/badge/root-not%20needed-lightgrey" alt="No root needed">
+</p>
+
+Your apps talk to the internet all the time, often when you aren't using them. Gatekeeper puts you in charge: block any app, or let it online only while it's on your screen. Watch live which servers every app connects to, stop trackers before a single byte reaches them, and send the apps you choose through Tor. It needs no root, has no ads or accounts, and everything stays on your phone.
+
+<p align="center">
+  <a href="https://github.com/1enMap/Gatekeeper/releases/latest"><b>Download the latest APK</b></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/home.png" width="260" alt="Home screen">
+  &nbsp;
+  <img src="docs/screenshots/app_detail.png" width="260" alt="Per-app controls">
+  &nbsp;
+  <img src="docs/screenshots/privacy.png" width="260" alt="Privacy tab">
+</p>
+
+## Three modes for every app
+
+Every installed app can be set to one of three modes:
 
 | Mode | Behaviour |
 |---|---|
